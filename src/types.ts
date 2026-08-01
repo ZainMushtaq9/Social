@@ -1,5 +1,7 @@
 export type VideoQuality = '1080p' | '720p' | '480p' | '360p' | 'SD' | 'HD' | 'Best';
 
+export type PlatformType = 'youtube' | 'instagram' | 'tiktok' | 'facebook' | 'twitter' | 'pinterest' | 'vimeo' | 'other';
+
 export interface QualityStream {
   quality: VideoQuality;
   label: string;
@@ -26,6 +28,7 @@ export interface FacebookVideo {
   sharesCount: number;
   originalPostUrl: string;
   isReel?: boolean;
+  platform?: PlatformType;
   qualityStreams: QualityStream[];
   selectedQuality: VideoQuality;
 }
@@ -41,6 +44,7 @@ export interface FacebookProfileInfo {
   totalVideosFound: number;
   category: string;
   bio: string;
+  platform?: PlatformType;
 }
 
 export type DownloadStatus = 
@@ -48,6 +52,7 @@ export type DownloadStatus =
   | 'queued' 
   | 'fetching_metadata' 
   | 'downloading' 
+  | 'paused'
   | 'processing_metadata' 
   | 'completed' 
   | 'failed' 
@@ -66,6 +71,10 @@ export interface DownloadTask {
   errorMessage?: string;
   savedFileName?: string;
   blobUrl?: string;
+  isPaused?: boolean;
+  platform?: PlatformType;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface GlobalDownloadSettings {
@@ -84,3 +93,4 @@ export interface ScrapeResponse {
   scrapedAt: string;
   message?: string;
 }
+

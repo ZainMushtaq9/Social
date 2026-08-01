@@ -34,8 +34,10 @@ export default function App() {
     customFilenamePattern: '{author}_{title}_{quality}'
   });
 
-  // Active concurrency queue processing ref
+  // Active concurrency queue processing & chunk buffers
   const processingQueueRef = useRef(false);
+  const abortControllersRef = useRef<{ [taskId: string]: AbortController }>({});
+  const downloadedChunksRef = useRef<{ [taskId: string]: Uint8Array[] }>({});
 
   // Helper to update settings
   const handleUpdateSettings = (newSettings: Partial<GlobalDownloadSettings>) => {
@@ -64,11 +66,11 @@ export default function App() {
         setVideos(data.videos);
         setSelectedIds(new Set(data.videos.map(v => v.id)));
       } else {
-        alert(data.message || 'No downloadable videos found for this Facebook link. Please make sure the link is public.');
+        alert(data.message || 'No downloadable videos found for this link. Please make sure the link is public.');
       }
     } catch (err) {
       console.error('Scrape request failed:', err);
-      alert('Unable to connect to the Facebook scraper service. Please check network or URL.');
+      alert('Unable to connect to the scraper service. Please check network or URL.');
     } finally {
       setIsLoadingScrape(false);
     }
@@ -109,10 +111,11 @@ export default function App() {
 
   // Format filename with metadata preservation
   const formatFilename = (video: FacebookVideo, quality: string) => {
+    const platformTag = (video.platform || 'Social').toUpperCase();
     const safeAuthor = video.authorName.replace(/[/\\?%*:|"<>]/g, '');
     const safeTitle = video.title.replace(/[/\\?%*:|"<>]/g, '').slice(0, 50);
-    const date = video.uploadDate || '2026';
-    return `[FB] ${safeAuthor} - ${safeTitle} (${quality} - ${date}).mp4`;
+    const date = video.uploadDate || new Date().toISOString().slice(0, 10);
+    return `[${platformTag}] ${safeAuthor} - ${safeTitle} (${quality} - ${date}).mp4`;
   };
 
   // Trigger individual video download or enqueue task
@@ -130,7 +133,8 @@ export default function App() {
       progressPercent: 0,
       downloadedBytes: 0,
       totalBytes: Math.round((stream?.fileSizeEstimateMB || 20) * 1024 * 1024),
-      speedBps: 0
+      speedBps: 0,
+      platform: video.platform
     };
 
     setDownloadTasks(prev => [...prev.filter(t => t.video.id !== video.id), newTask]);
@@ -146,6 +150,61 @@ export default function App() {
     });
   };
 
+  // Pause single task
+  const handlePauseTask = (taskId: string) => {
+    if (abortControllersRef.current[taskId]) {
+      abortControllersRef.current[taskId].abort();
+      delete abortControllersRef.current[taskId];
+    }
+    setDownloadTasks(prev =>
+      prev.map(t => (t.id === taskId ? { ...t, status: 'paused', isPaused: true, speedBps: 0 } : t))
+    );
+  };
+
+  // Resume paused task
+  const handleResumeTask = (taskId: string) => {
+    setDownloadTasks(prev =>
+      prev.map(t => (t.id === taskId ? { ...t, status: 'queued', isPaused: false } : t))
+    );
+  };
+
+  // Retry failed task
+  const handleRetryTask = (taskId: string) => {
+    delete downloadedChunksRef.current[taskId];
+    if (abortControllersRef.current[taskId]) {
+      abortControllersRef.current[taskId].abort();
+      delete abortControllersRef.current[taskId];
+    }
+    setDownloadTasks(prev =>
+      prev.map(t => (t.id === taskId ? { ...t, status: 'queued', progressPercent: 0, downloadedBytes: 0, speedBps: 0 } : t))
+    );
+  };
+
+  // Cancel single task
+  const handleCancelTask = (taskId: string) => {
+    delete downloadedChunksRef.current[taskId];
+    if (abortControllersRef.current[taskId]) {
+      abortControllersRef.current[taskId].abort();
+      delete abortControllersRef.current[taskId];
+    }
+    setDownloadTasks(prev => prev.filter(t => t.id !== taskId));
+  };
+
+  // Cancel all tasks
+  const handleCancelAll = () => {
+    Object.keys(abortControllersRef.current).forEach(id => {
+      abortControllersRef.current[id]?.abort();
+    });
+    abortControllersRef.current = {};
+    downloadedChunksRef.current = {};
+    setDownloadTasks([]);
+  };
+
+  // Clear completed tasks
+  const handleClearCompleted = () => {
+    setDownloadTasks(prev => prev.filter(t => t.status !== 'completed'));
+  };
+
   // Task Queue Concurrency Engine Effect
   useEffect(() => {
     const processQueue = async () => {
@@ -159,41 +218,72 @@ export default function App() {
 
       processingQueueRef.current = true;
 
+      // Create AbortController for pause/cancel
+      const controller = new AbortController();
+      abortControllersRef.current[nextQueuedTask.id] = controller;
+
+      // Existing chunks for resume capability
+      const chunks: Uint8Array[] = downloadedChunksRef.current[nextQueuedTask.id] || [];
+      let receivedBytes = chunks.reduce((acc, c) => acc + c.length, 0);
+
       // Mark task as downloading
       setDownloadTasks(prev =>
-        prev.map(t => (t.id === nextQueuedTask.id ? { ...t, status: 'downloading', progressPercent: 5 } : t))
+        prev.map(t => (t.id === nextQueuedTask.id ? { ...t, status: 'downloading', isPaused: false } : t))
       );
 
       try {
         const targetFilename = formatFilename(nextQueuedTask.video, nextQueuedTask.chosenQuality);
         const proxyUrl = `/api/download-proxy?url=${encodeURIComponent(nextQueuedTask.chosenStream.url)}&filename=${encodeURIComponent(targetFilename)}`;
 
-        const response = await fetch(proxyUrl);
-        if (!response.ok) {
+        const fetchHeaders: Record<string, string> = {};
+        if (receivedBytes > 0) {
+          fetchHeaders['Range'] = `bytes=${receivedBytes}-`;
+        }
+
+        const response = await fetch(proxyUrl, {
+          signal: controller.signal,
+          headers: fetchHeaders
+        });
+
+        if (!response.ok && response.status !== 206) {
           throw new Error(`Proxy stream failed with status HTTP ${response.status}`);
         }
 
         const contentLengthHeader = response.headers.get('content-length');
-        const totalSize = contentLengthHeader ? parseInt(contentLengthHeader, 10) : nextQueuedTask.totalBytes || 20971520;
+        const contentRangeHeader = response.headers.get('content-range');
+
+        let totalSize = nextQueuedTask.totalBytes || 20971520;
+        if (contentRangeHeader) {
+          const match = contentRangeHeader.match(/\/(\d+)/);
+          if (match && match[1]) {
+            totalSize = parseInt(match[1], 10);
+          }
+        } else if (contentLengthHeader) {
+          totalSize = receivedBytes + parseInt(contentLengthHeader, 10);
+        }
 
         if (!response.body) {
           throw new Error('Response body stream unavailable');
         }
 
         const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let receivedBytes = 0;
         const startTime = Date.now();
 
         while (true) {
+          if (controller.signal.aborted) {
+            // Task was paused or cancelled by user
+            return;
+          }
+
           const { done, value } = await reader.read();
           if (done) break;
 
           chunks.push(value);
+          downloadedChunksRef.current[nextQueuedTask.id] = chunks;
           receivedBytes += value.length;
 
           const elapsedSec = (Date.now() - startTime) / 1000;
-          const currentSpeed = elapsedSec > 0 ? receivedBytes / elapsedSec : 0;
+          const currentSpeed = elapsedSec > 0 ? (value.length) / elapsedSec : 0;
           const pct = Math.min(99, Math.round((receivedBytes / totalSize) * 100));
 
           setDownloadTasks(prev =>
@@ -203,6 +293,7 @@ export default function App() {
                     ...t,
                     progressPercent: pct,
                     downloadedBytes: receivedBytes,
+                    totalBytes: totalSize,
                     speedBps: currentSpeed
                   }
                 : t
@@ -222,6 +313,9 @@ export default function App() {
           document.body.removeChild(a);
         }
 
+        delete downloadedChunksRef.current[nextQueuedTask.id];
+        delete abortControllersRef.current[nextQueuedTask.id];
+
         // Complete task
         setDownloadTasks(prev =>
           prev.map(t =>
@@ -231,6 +325,7 @@ export default function App() {
                   status: 'completed',
                   progressPercent: 100,
                   downloadedBytes: receivedBytes,
+                  totalBytes: receivedBytes,
                   blobUrl,
                   savedFileName: targetFilename
                 }
@@ -238,6 +333,11 @@ export default function App() {
           )
         );
       } catch (err: any) {
+        if (err.name === 'AbortError' || controller.signal.aborted) {
+          console.log(`Task ${nextQueuedTask.id} download stream paused or cancelled.`);
+          return;
+        }
+
         console.error('Download error:', err);
         setDownloadTasks(prev =>
           prev.map(t =>
@@ -317,22 +417,7 @@ export default function App() {
     }
   };
 
-  // Cancel single task
-  const handleCancelTask = (id: string) => {
-    setDownloadTasks(prev => prev.filter(t => t.id !== id));
-  };
-
-  // Cancel all tasks
-  const handleCancelAll = () => {
-    setDownloadTasks([]);
-  };
-
-  // Clear completed tasks
-  const handleClearCompleted = () => {
-    setDownloadTasks(prev => prev.filter(t => t.status !== 'completed'));
-  };
-
-  // Dictionary of active download progress per video ID for card badges
+  // Map active download progress percent for badges
   const activeDownloadsMap: Record<string, number> = {};
   downloadTasks.forEach(t => {
     if (t.status === 'downloading' || t.status === 'queued') {
@@ -381,13 +466,15 @@ export default function App() {
           tasks={downloadTasks}
           settings={settings}
           onUpdateSettings={handleUpdateSettings}
-          onPauseTask={() => {}}
-          onResumeTask={() => {}}
+          onPauseTask={handlePauseTask}
+          onResumeTask={handleResumeTask}
+          onRetryTask={handleRetryTask}
           onCancelTask={handleCancelTask}
           onCancelAll={handleCancelAll}
           onClearCompleted={handleClearCompleted}
           onDownloadZip={handleDownloadZip}
           isZipping={isZipping}
+          onOpenPreview={(video) => setPreviewVideo(video)}
         />
 
         {/* Videos Grid or Empty State */}

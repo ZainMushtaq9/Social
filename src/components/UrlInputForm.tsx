@@ -41,15 +41,25 @@ export const UrlInputForm: React.FC<UrlInputFormProps> = ({
         {/* Title / Description */}
         <div className="text-center space-y-1.5">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5" /> High-Resolution Batch Facebook Video Scraper
+            <Sparkles className="w-3.5 h-3.5" /> Multi-Platform Batch Social Media Video Scraper
           </div>
           <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-            Enter Facebook Profile, Page, Reel, or Video Link
+            Scrape & Download Videos from YouTube, Instagram, TikTok, Facebook & More
           </h2>
           <p className="text-xs sm:text-sm text-slate-400 max-w-xl mx-auto flex items-center justify-center gap-1.5 flex-wrap">
-            <span>Powered by <strong className="text-emerald-400 font-semibold">yt-dlp core</strong>.</span>
-            <span>Extracts video streams in 1080p, 720p, and SD/HD quality with original metadata for batch local downloading.</span>
+            <span>Powered by <strong className="text-emerald-400 font-semibold">yt-dlp core engine</strong>.</span>
+            <span>Extracts video streams in 1080p, 720p, and SD/HD quality with thumbnails for direct local drive saving.</span>
           </p>
+
+          {/* Social Platform Badges */}
+          <div className="flex items-center justify-center gap-1.5 pt-1.5 flex-wrap text-[11px] font-semibold">
+            <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">YouTube / Shorts</span>
+            <span className="px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-400 border border-pink-500/30">Instagram / Reels</span>
+            <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">TikTok</span>
+            <span className="px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-400 border border-blue-600/30">Facebook</span>
+            <span className="px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/30">Twitter / X</span>
+            <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30">Pinterest</span>
+          </div>
         </div>
 
         {/* Input Bar Form */}
@@ -63,7 +73,7 @@ export const UrlInputForm: React.FC<UrlInputFormProps> = ({
               type="text"
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
-              placeholder="Enter Facebook link (e.g. https://facebook.com/watch?v=... or reel or page)"
+              placeholder="Paste YouTube, Instagram, TikTok, Facebook, or Twitter link..."
               className="w-full pl-11 pr-28 sm:pr-36 py-3.5 rounded-xl bg-slate-950 border border-slate-700/80 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/80 focus:border-blue-500 transition-all shadow-inner"
               required
             />

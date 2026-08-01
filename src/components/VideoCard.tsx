@@ -90,8 +90,13 @@ export const VideoCard: React.FC<VideoCardProps> = ({
             </div>
           </div>
 
-          {/* Top Right Badges (Reel / Quality) */}
+          {/* Top Right Badges (Platform / Reel / Quality) */}
           <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5">
+            {video.platform && (
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-950/90 text-slate-200 border border-slate-700 capitalize shadow">
+                {video.platform}
+              </span>
+            )}
             {video.isReel && (
               <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-gradient-to-r from-pink-500 to-purple-600 text-white uppercase tracking-wider shadow">
                 Reel

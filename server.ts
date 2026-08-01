@@ -4,7 +4,7 @@ import fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createServer as createViteServer } from 'vite';
-import { FacebookProfileInfo, FacebookVideo, QualityStream } from './src/types.js';
+import { FacebookProfileInfo, FacebookVideo, QualityStream, PlatformType, VideoQuality } from './src/types.js';
 
 const execFileAsync = promisify(execFile);
 const app = express();
@@ -77,6 +77,18 @@ function formatDate(rawDate?: string): string {
   return rawDate;
 }
 
+function detectPlatform(url: string, extractorKey?: string): PlatformType {
+  const lower = (url + ' ' + (extractorKey || '')).toLowerCase();
+  if (lower.includes('youtube') || lower.includes('youtu.be')) return 'youtube';
+  if (lower.includes('instagram') || lower.includes('instagr.am')) return 'instagram';
+  if (lower.includes('tiktok')) return 'tiktok';
+  if (lower.includes('facebook') || lower.includes('fb.watch') || lower.includes('fb.com')) return 'facebook';
+  if (lower.includes('twitter') || lower.includes('x.com')) return 'twitter';
+  if (lower.includes('pinterest') || lower.includes('pin.it')) return 'pinterest';
+  if (lower.includes('vimeo')) return 'vimeo';
+  return 'other';
+}
+
 // Extract media using yt-dlp
 async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookProfileInfo; videos: FacebookVideo[] }> {
   const binaryPath = await ensureYtDlp();
@@ -88,7 +100,7 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
     '--no-call-home',
     targetUrl
   ], {
-    maxBuffer: 20 * 1024 * 1024
+    maxBuffer: 25 * 1024 * 1024
   });
 
   const rawData = JSON.parse(stdout.trim());
@@ -107,8 +119,21 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
   }
 
   const primaryEntry = rawEntries[0] || rawData;
-  const authorName = primaryEntry.uploader || primaryEntry.uploader_id || rawData.title || 'Facebook Creator';
-  const authorHandle = primaryEntry.uploader_id ? `@${primaryEntry.uploader_id}` : '@facebook';
+  const platform = detectPlatform(targetUrl, primaryEntry.extractor || primaryEntry.extractor_key);
+  
+  const platformNames: Record<PlatformType, string> = {
+    youtube: 'YouTube',
+    instagram: 'Instagram',
+    tiktok: 'TikTok',
+    facebook: 'Facebook',
+    twitter: 'Twitter / X',
+    pinterest: 'Pinterest',
+    vimeo: 'Vimeo',
+    other: 'Social Media'
+  };
+
+  const authorName = primaryEntry.uploader || primaryEntry.uploader_id || primaryEntry.channel || rawData.title || `${platformNames[platform]} Creator`;
+  const authorHandle = primaryEntry.uploader_id ? `@${primaryEntry.uploader_id}` : (primaryEntry.channel_id ? `@${primaryEntry.channel_id}` : `@${platform}`);
   const authorAvatar = primaryEntry.thumbnail || (primaryEntry.thumbnails && primaryEntry.thumbnails[0]?.url) || '';
 
   const profileInfo: FacebookProfileInfo = {
@@ -118,69 +143,71 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
     avatarUrl: authorAvatar,
     coverUrl: '',
     verified: true,
-    followersCount: primaryEntry.view_count || 0,
+    followersCount: primaryEntry.view_count || primaryEntry.channel_follower_count || 0,
     totalVideosFound: rawEntries.length,
-    category: 'Public Content',
-    bio: primaryEntry.description || `Extracted ${rawEntries.length} media file(s) via yt-dlp`
+    category: `${platformNames[platform]} Content`,
+    bio: primaryEntry.description || `Extracted ${rawEntries.length} media file(s) from ${platformNames[platform]} via yt-dlp core`,
+    platform
   };
 
   const extractedVideos: FacebookVideo[] = rawEntries.map((item: any, idx: number) => {
-    const videoId = item.id || item.display_id || `fb-video-${Date.now()}-${idx}`;
-    const title = item.title || item.fulltitle || 'Facebook Video';
+    const videoId = item.id || item.display_id || `vid-${Date.now()}-${idx}`;
+    const title = item.title || item.fulltitle || `${platformNames[platform]} Video`;
     const description = item.description || title;
     const duration = Math.round(item.duration || 0);
     const thumb = item.thumbnail || (item.thumbnails && item.thumbnails.slice(-1)[0]?.url) || authorAvatar;
-    const isReel = targetUrl.includes('/reel/') || targetUrl.includes('/reels/') || (item.width && item.height && item.height > item.width);
+    const isReel = targetUrl.includes('/reel/') || targetUrl.includes('/reels/') || targetUrl.includes('/shorts/') || (item.width && item.height && item.height > item.width);
 
     // Extract formats/quality streams
     const qualityStreams: QualityStream[] = [];
     const formats: any[] = Array.isArray(item.formats) ? item.formats : [];
 
-    // Look for HD and SD formats or direct stream
-    const hdFormat = formats.find((f: any) => f.format_id === 'hd' || f.quality === -2 || (f.height && f.height >= 720)) || formats[formats.length - 1];
-    const sdFormat = formats.find((f: any) => f.format_id === 'sd' || f.quality === -3 || (f.height && f.height < 720)) || formats[0];
+    // Filter direct formats with URLs
+    const directFormats = formats.filter((f: any) => f.url && typeof f.url === 'string');
 
-    if (hdFormat && hdFormat.url) {
-      const approxBytes = hdFormat.filesize || hdFormat.filesize_approx || (hdFormat.bitrate && duration ? Math.round((hdFormat.bitrate * duration) / 8) : 0);
-      qualityStreams.push({
-        quality: '1080p',
-        label: hdFormat.format_id === 'hd' ? '1080p HD High Quality Stream' : `${hdFormat.height || 1080}p High Quality`,
-        resolution: hdFormat.width && hdFormat.height ? `${hdFormat.width}x${hdFormat.height}` : '1920x1080',
-        bitrate: hdFormat.bitrate ? `${Math.round(hdFormat.bitrate / 1000)} Kbps` : 'High Quality',
-        fileSizeEstimateMB: approxBytes ? parseFloat((approxBytes / (1024 * 1024)).toFixed(1)) : 0,
-        url: hdFormat.url
-      });
-    }
+    // Heights to extract: 1080p, 720p, 480p, 360p
+    const heights = [1080, 720, 480, 360];
+    heights.forEach((h) => {
+      const match = directFormats.find((f: any) => f.height === h || (f.height && Math.abs(f.height - h) <= 50));
+      if (match && match.url) {
+        const approxBytes = match.filesize || match.filesize_approx || (match.bitrate && duration ? Math.round((match.bitrate * duration) / 8) : 0);
+        const qLabel = h >= 1080 ? '1080p' : h >= 720 ? '720p' : h >= 480 ? '480p' : '360p';
+        
+        if (!qualityStreams.some(s => s.quality === qLabel)) {
+          qualityStreams.push({
+            quality: qLabel as VideoQuality,
+            label: `${match.height || h}p ${h >= 720 ? 'HD High Quality' : 'SD Standard'} Stream`,
+            resolution: match.width && match.height ? `${match.width}x${match.height}` : `${Math.round(h * 16 / 9)}x${h}`,
+            bitrate: match.bitrate ? `${Math.round(match.bitrate / 1000)} Kbps` : `${h >= 720 ? 'High' : 'Standard'} Quality`,
+            fileSizeEstimateMB: approxBytes ? parseFloat((approxBytes / (1024 * 1024)).toFixed(1)) : 0,
+            url: match.url
+          });
+        }
+      }
+    });
 
-    if (sdFormat && sdFormat.url && sdFormat.url !== hdFormat?.url) {
-      const approxBytes = sdFormat.filesize || sdFormat.filesize_approx || (sdFormat.bitrate && duration ? Math.round((sdFormat.bitrate * duration) / 8) : 0);
-      qualityStreams.push({
-        quality: '720p',
-        label: sdFormat.format_id === 'sd' ? '720p SD Standard Stream' : `${sdFormat.height || 720}p Standard Quality`,
-        resolution: sdFormat.width && sdFormat.height ? `${sdFormat.width}x${sdFormat.height}` : '1280x720',
-        bitrate: sdFormat.bitrate ? `${Math.round(sdFormat.bitrate / 1000)} Kbps` : 'Standard',
-        fileSizeEstimateMB: approxBytes ? parseFloat((approxBytes / (1024 * 1024)).toFixed(1)) : 0,
-        url: sdFormat.url
-      });
-    }
-
-    // Fallback stream if no formats matched
-    if (qualityStreams.length === 0 && (item.url || primaryEntry.url)) {
-      qualityStreams.push({
-        quality: '1080p',
-        label: '1080p Original Stream',
-        resolution: '1920x1080',
-        bitrate: 'Original',
-        fileSizeEstimateMB: 0,
-        url: item.url || primaryEntry.url
-      });
+    // Fallback best format if qualityStreams is empty
+    if (qualityStreams.length === 0) {
+      const bestF = directFormats.slice().reverse().find((f: any) => f.url) || item;
+      const streamUrl = bestF.url || item.url || primaryEntry.url;
+      if (streamUrl) {
+        const approxBytes = bestF.filesize || bestF.filesize_approx || 0;
+        qualityStreams.push({
+          quality: '1080p',
+          label: '1080p Original Quality Stream',
+          resolution: bestF.width && bestF.height ? `${bestF.width}x${bestF.height}` : '1920x1080',
+          bitrate: 'Original Quality',
+          fileSizeEstimateMB: approxBytes ? parseFloat((approxBytes / (1024 * 1024)).toFixed(1)) : 0,
+          url: streamUrl
+        });
+      }
     }
 
     return {
       id: videoId,
       title,
       description,
-      authorName: item.uploader || authorName,
+      authorName: item.uploader || item.channel || authorName,
       authorHandle: item.uploader_id ? `@${item.uploader_id}` : authorHandle,
       authorAvatar: thumb || authorAvatar,
       thumbnailUrl: thumb,
@@ -193,6 +220,7 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
       sharesCount: item.repost_count || item.share_count || 0,
       originalPostUrl: item.webpage_url || targetUrl,
       isReel: Boolean(isReel),
+      platform,
       qualityStreams,
       selectedQuality: 'Best'
     };
@@ -423,42 +451,57 @@ app.post('/api/scrape', async (req, res) => {
 app.get('/api/download-proxy', async (req, res) => {
   try {
     const videoUrl = req.query.url as string;
-    const filename = (req.query.filename as string) || 'facebook_video.mp4';
+    const filename = (req.query.filename as string) || 'social_media_video.mp4';
 
     if (!videoUrl) {
       return res.status(400).send('Missing video URL parameter.');
     }
 
-    const videoResponse = await fetch(videoUrl, {
-      headers: {
-        'User-Agent': 'facebookexternalhit/1.1',
-        'Accept': '*/*'
-      }
-    });
+    const headers: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    };
 
-    if (!videoResponse.ok) {
-      return res.status(502).send('Failed to fetch remote video binary stream.');
+    if (req.headers.range) {
+      headers['Range'] = req.headers.range;
+    }
+
+    const videoResponse = await fetch(videoUrl, { headers });
+
+    if (!videoResponse.ok && videoResponse.status !== 206) {
+      return res.status(502).send(`Failed to fetch remote video binary stream. Status: ${videoResponse.status}`);
     }
 
     const contentType = videoResponse.headers.get('content-type') || 'video/mp4';
     const contentLength = videoResponse.headers.get('content-length');
+    const contentRange = videoResponse.headers.get('content-range');
 
-    // Clean filename for HTTP Content-Disposition header
     const safeFilename = encodeURIComponent(filename.replace(/[/\\?%*:|"<>]/g, '_'));
 
+    res.status(videoResponse.status);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${safeFilename}`);
-    if (contentLength) {
-      res.setHeader('Content-Length', contentLength);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    if (!videoResponse.body) {
+      const arrayBuffer = await videoResponse.arrayBuffer();
+      return res.send(Buffer.from(arrayBuffer));
     }
 
-    // Stream binary video buffer to response
-    const arrayBuffer = await videoResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    res.send(buffer);
+    const reader = videoResponse.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(value);
+    }
+    res.end();
   } catch (err: any) {
     console.error('Download proxy error:', err);
-    res.status(500).send('Server error downloading video.');
+    if (!res.headersSent) {
+      res.status(500).send('Server error downloading video.');
+    }
   }
 });
 
