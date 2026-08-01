@@ -1,0 +1,6 @@
+{
+  "name": "Facebook Video Downloader & Batch Scraper",
+  "description": "Scrape, preview, select, and batch download high-resolution videos from Facebook profiles with concurrent downloads, resolution choices, and progress tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
