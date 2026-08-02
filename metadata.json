@@ -1,6 +1,6 @@
 {
-  "name": "New Application",
-  "description": "A fresh application ready for development.",
+  "name": "Universal Media Downloader",
+  "description": "A modern, open-source universal media downloader for public video, audio, and gallery media across YouTube, Facebook, Instagram, TikTok, Twitter/X, Reddit, Pinterest, and more.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
