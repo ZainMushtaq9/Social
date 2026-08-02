@@ -76,15 +76,21 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
               
               <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
                 <span className="text-blue-400 font-medium">{profile.handle}</span>
+                {profile.followersCount > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-slate-500" />
+                      {profile.followersCount >= 1000000 
+                        ? `${(profile.followersCount / 1000000).toFixed(1)}M Followers` 
+                        : `${profile.followersCount.toLocaleString()} Followers`}
+                    </span>
+                  </>
+                )}
                 <span>•</span>
-                <span className="flex items-center gap-1">
-                  <Users className="w-3.5 h-3.5 text-slate-500" />
-                  {(profile.followersCount / 1000000).toFixed(1)}M Followers
-                </span>
-                <span>•</span>
-                <span className="flex items-center gap-1 font-semibold text-emerald-400">
-                  <Video className="w-3.5 h-3.5" />
-                  {totalCount} Scraped Videos
+                <span className="flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-md border border-emerald-500/20">
+                  <Video className="w-3.5 h-3.5 text-emerald-400" />
+                  {totalCount} Video{totalCount !== 1 ? 's' : ''} Scraped
                 </span>
               </div>
             </div>

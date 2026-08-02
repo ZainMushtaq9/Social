@@ -11,7 +11,7 @@ import {
   FacebookProfileInfo, FacebookVideo, DownloadTask, 
   GlobalDownloadSettings, VideoQuality, ScrapeResponse 
 } from './types';
-import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio } from 'lucide-react';
+import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio, AlertCircle } from 'lucide-react';
 
 export default function App() {
   // State
@@ -21,6 +21,7 @@ export default function App() {
 
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [isLoadingScrape, setIsLoadingScrape] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [previewVideo, setPreviewVideo] = useState<FacebookVideo | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isZipping, setIsZipping] = useState<boolean>(false);
@@ -45,19 +46,27 @@ export default function App() {
   };
 
   // Scrape URL handler
-  const handleScrapeUrl = async (rawUrl: string) => {
+  const handleScrapeUrl = async (rawUrl: string, dateFrom?: string, dateTo?: string) => {
     setIsLoadingScrape(true);
+    setErrorMessage(null);
     try {
       const response = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: rawUrl,
+          dateFrom,
+          dateTo,
           lowBandwidthMode: settings.lowBandwidthMode
         })
       });
 
-      const data: ScrapeResponse = await response.json();
+      let data: ScrapeResponse;
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        throw new Error('Server returned an invalid response format.');
+      }
 
       if (data.success && data.videos && data.videos.length > 0) {
         if (data.profile) {
@@ -66,11 +75,11 @@ export default function App() {
         setVideos(data.videos);
         setSelectedIds(new Set(data.videos.map(v => v.id)));
       } else {
-        alert(data.message || 'No downloadable videos found for this link. Please make sure the link is public.');
+        setErrorMessage(data.message || 'No public video streams found for this link. Please make sure the link is public and accessible.');
       }
     } catch (err) {
       console.error('Scrape request failed:', err);
-      alert('Unable to connect to the scraper service. Please check network or URL.');
+      setErrorMessage('Unable to connect to the scraper service. Please check network or URL.');
     } finally {
       setIsLoadingScrape(false);
     }
@@ -304,17 +313,22 @@ export default function App() {
         const blob = new Blob(chunks, { type: 'video/mp4' });
         const blobUrl = URL.createObjectURL(blob);
 
-        if (settings.saveMode === 'individual') {
-          const a = document.createElement('a');
-          a.href = blobUrl;
-          a.download = targetFilename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        }
+        // Immediately trigger local disk download save as each video finishes
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = targetFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
+        // Free chunk buffers and controllers from memory immediately
         delete downloadedChunksRef.current[nextQueuedTask.id];
         delete abortControllersRef.current[nextQueuedTask.id];
+
+        // Revoke Object URL after brief delay to release browser memory
+        setTimeout(() => {
+          URL.revokeObjectURL(blobUrl);
+        }, 15000);
 
         // Complete task
         setDownloadTasks(prev =>
@@ -446,6 +460,23 @@ export default function App() {
           isLoading={isLoadingScrape}
           activeProfileName={profile?.name}
         />
+
+        {/* Error / Status Notice */}
+        {errorMessage && (
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 flex items-start gap-3 animate-fadeIn">
+            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm leading-relaxed">
+              <p className="font-semibold text-amber-300 mb-0.5">Extraction Notice</p>
+              <p className="text-amber-200/90">{errorMessage}</p>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-amber-400 hover:text-amber-200 text-xs font-medium px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Profile Card Header */}
         {profile && (
