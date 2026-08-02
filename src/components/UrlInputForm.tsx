@@ -41,29 +41,14 @@ export const UrlInputForm: React.FC<UrlInputFormProps> = ({
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-2xl shadow-blue-950/20 text-white transition-all">
       <div className="max-w-3xl mx-auto space-y-4">
         
-        {/* Title / Description */}
-        <div className="text-center space-y-1.5">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5" /> Multi-Platform Batch Social Media Video Scraper
-          </div>
+        {/* Title / Subtitle */}
+        <div className="text-center space-y-1">
           <h2 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
-            Scrape & Download Videos from YouTube, Instagram, TikTok, Facebook & More
+            Video & Reel Scraper
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400 max-w-xl mx-auto flex items-center justify-center gap-1.5 flex-wrap">
-            <span>Powered by <strong className="text-emerald-400 font-semibold">yt-dlp core engine</strong>.</span>
-            <span>Extracts video streams in 1080p, 720p, and SD/HD quality with 500+ video playlist support.</span>
+          <p className="text-xs sm:text-sm text-slate-400">
+            Paste any Profile, Reel, or Video URL to extract media details and download
           </p>
-
-          {/* Social Platform & Link Type Badges */}
-          <div className="flex items-center justify-center gap-1.5 pt-1.5 flex-wrap text-[11px] font-semibold">
-            <span className="px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-400 border border-blue-600/30">Facebook Reels</span>
-            <span className="px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-400 border border-blue-600/30">Watch Videos</span>
-            <span className="px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-400 border border-blue-600/30">Playlists & Feeds</span>
-            <span className="px-2 py-0.5 rounded-full bg-blue-600/10 text-blue-400 border border-blue-600/30">Profiles & Share Links</span>
-            <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">YouTube / Shorts</span>
-            <span className="px-2 py-0.5 rounded-full bg-pink-500/10 text-pink-400 border border-pink-500/30">Instagram / Reels</span>
-            <span className="px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">TikTok</span>
-          </div>
         </div>
 
         {/* Input Bar Form */}

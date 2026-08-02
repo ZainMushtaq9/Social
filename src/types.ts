@@ -1,4 +1,4 @@
-export type VideoQuality = '2160p' | '1440p' | '1080p' | '720p' | '480p' | '360p' | 'SD' | 'HD' | 'Best' | 'Audio Only';
+export type VideoQuality = '2160p' | '1440p' | '1080p' | '720p' | '480p' | '360p' | 'SD' | 'HD' | 'Best' | 'Audio Only' | 'MP3';
 
 export type PlatformType = 'youtube' | 'instagram' | 'tiktok' | 'facebook' | 'twitter' | 'pinterest' | 'vimeo' | 'other';
 
@@ -86,6 +86,19 @@ export interface GlobalDownloadSettings {
   customFilenamePattern: string; // e.g. "{author}_{title}_{quality}"
 }
 
+export interface DebugInfo {
+  originalUrl: string;
+  cleanedUrl: string;
+  resolvedUrl: string;
+  redirectChain: string[];
+  detectedPlatform: PlatformType;
+  ytDlpCommand?: string;
+  ytDlpStdoutSnippet?: string;
+  ytDlpStderrSnippet?: string;
+  extractionError?: string;
+  scrapedAt: string;
+}
+
 export interface AppErrorInfo {
   type: 'INVALID_URL' | 'UNSUPPORTED_PLATFORM' | 'PRIVATE_RESTRICTED' | 'NO_VIDEOS_FOUND' | 'DOWNLOAD_FAILED' | 'NETWORK_ERROR' | 'UNKNOWN';
   title: string;
@@ -96,17 +109,21 @@ export interface AppErrorInfo {
   videoId?: string;
   statusCode?: number;
   suggestions?: string[];
+  debugInfo?: DebugInfo;
 }
 
 export interface ScrapeResponse {
   success: boolean;
+  platform?: PlatformType;
+  title?: string;
   isProfileOnly?: boolean;
-  profile?: FacebookProfileInfo;
+  profile?: FacebookProfileInfo | null;
   videos: FacebookVideo[];
   scrapedAt: string;
   message?: string;
   errorType?: 'INVALID_URL' | 'UNSUPPORTED_PLATFORM' | 'PRIVATE_RESTRICTED' | 'NO_VIDEOS_FOUND' | 'NETWORK_ERROR' | 'UNKNOWN';
   errorDetails?: string;
   suggestions?: string[];
+  debugInfo?: DebugInfo;
 }
 

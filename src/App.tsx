@@ -6,13 +6,15 @@ import { ProfileHeaderCard } from './components/ProfileHeaderCard';
 import { VideoGrid } from './components/VideoGrid';
 import { DownloadManager } from './components/DownloadManager';
 import { VideoModal } from './components/VideoModal';
+import { FormatModal } from './components/FormatModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ErrorReportModal } from './components/ErrorReportModal';
+import { DebugPanel } from './components/DebugPanel';
 import { 
   FacebookProfileInfo, FacebookVideo, DownloadTask, 
-  GlobalDownloadSettings, VideoQuality, ScrapeResponse, AppErrorInfo 
+  GlobalDownloadSettings, VideoQuality, ScrapeResponse, AppErrorInfo, DebugInfo
 } from './types';
-import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio, AlertCircle, Bug } from 'lucide-react';
+import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio, AlertCircle, Bug, Terminal } from 'lucide-react';
 
 export default function App() {
   // State
@@ -24,7 +26,11 @@ export default function App() {
   const [isLoadingScrape, setIsLoadingScrape] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeErrorInfo, setActiveErrorInfo] = useState<AppErrorInfo | null>(null);
+  const [currentDebugInfo, setCurrentDebugInfo] = useState<DebugInfo | null>(null);
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState<boolean>(false);
+
   const [previewVideo, setPreviewVideo] = useState<FacebookVideo | null>(null);
+  const [formatModalVideo, setFormatModalVideo] = useState<FacebookVideo | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isZipping, setIsZipping] = useState<boolean>(false);
 
@@ -84,46 +90,38 @@ export default function App() {
         return;
       }
 
+      if (data.debugInfo) {
+        setCurrentDebugInfo(data.debugInfo);
+      }
+
       if (data.success && data.videos && data.videos.length > 0) {
-        if (data.profile) {
-          setProfile(data.profile);
-        }
+        setProfile(data.profile || null);
         setVideos(data.videos);
         setSelectedIds(new Set(data.videos.map(v => v.id)));
         setErrorMessage(null);
         setActiveErrorInfo(null);
-      } else if (data.success && (data.profile || data.isProfileOnly)) {
-        if (data.profile) {
-          setProfile(data.profile);
-        }
+      } else {
+        const friendlyMsg = data.message || 'No public video streams found for this link. Please make sure the post is public and accessible.';
+        setErrorMessage(friendlyMsg);
+        setProfile(data.profile || null);
         setVideos([]);
         setSelectedIds(new Set());
-        setErrorMessage(null);
-        setActiveErrorInfo(null);
-      } else {
-        const friendlyMsg = data.message || 'No public video streams found for this link. Please make sure the link is public and accessible.';
-        setErrorMessage(friendlyMsg);
-        
-        // Prepare diagnostic error payload
+
         const errorObj: AppErrorInfo = {
           type: data.errorType || 'NO_VIDEOS_FOUND',
-          title: data.errorType === 'INVALID_URL' ? 'Invalid Link Format' : data.errorType === 'PRIVATE_RESTRICTED' ? 'Restricted / Private Post' : 'No Public Videos Found',
+          title: data.errorType === 'INVALID_URL' ? 'Invalid Link Format' : 'No Public Videos Found',
           message: friendlyMsg,
           details: data.errorDetails || 'yt-dlp and HTML scraper pipeline yielded 0 stream results.',
           targetUrl: rawUrl,
           statusCode: response.status,
           suggestions: data.suggestions || [
-            'Make sure the post or reel is set to Public',
-            'Try pasting a direct Reel link (e.g. facebook.com/reel/...)',
-            'Verify that the URL was copied correctly'
-          ]
+            'Ensure the post or profile is public',
+            'Try pasting a direct Reel or video link',
+            'Check the Developer Debug Panel for raw CLI logs and redirect steps'
+          ],
+          debugInfo: data.debugInfo
         };
-        
-        // Save current profile metadata if present even if 0 videos returned
-        if (data.profile) {
-          setProfile(data.profile);
-        }
-        
+
         setActiveErrorInfo(errorObj);
       }
     } catch (err: any) {
@@ -208,6 +206,15 @@ export default function App() {
     };
 
     setDownloadTasks(prev => [...prev.filter(t => t.video.id !== video.id), newTask]);
+  };
+
+  // Initiate download flow: display quality selection modal if multiple formats available
+  const handleInitiateDownload = (video: FacebookVideo) => {
+    if (video.qualityStreams && video.qualityStreams.length > 1) {
+      setFormatModalVideo(video);
+    } else {
+      enqueueDownloadTask(video);
+    }
   };
 
   // Start batch download for all selected videos
@@ -544,13 +551,23 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              {currentDebugInfo && (
+                <button
+                  onClick={() => setIsDebugPanelOpen(true)}
+                  className="text-purple-300 hover:text-white text-xs font-semibold px-2.5 py-1 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 transition flex items-center gap-1.5"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Developer Debug Logs</span>
+                </button>
+              )}
+
               {activeErrorInfo && (
                 <button
                   onClick={() => setActiveErrorInfo(activeErrorInfo)}
                   className="text-amber-300 hover:text-white text-xs font-semibold px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 transition flex items-center gap-1.5"
                 >
                   <Bug className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Debug & Report</span>
+                  <span>Report Error</span>
                 </button>
               )}
 
@@ -598,52 +615,26 @@ export default function App() {
 
         {/* Videos Grid or Empty State */}
         {videos.length === 0 ? (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-slate-400 max-w-3xl mx-auto my-8 space-y-6 shadow-2xl">
-            <div className="w-16 h-16 rounded-2xl bg-blue-600/10 border border-blue-500/20 text-blue-400 flex items-center justify-center mx-auto shadow-inner">
-              <Film className="w-8 h-8 text-blue-400" />
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 max-w-xl mx-auto my-8 space-y-4 shadow-xl">
+            <div className="w-14 h-14 rounded-2xl bg-blue-600/10 border border-blue-500/20 text-blue-400 flex items-center justify-center mx-auto">
+              <Film className="w-7 h-7 text-blue-400" />
             </div>
 
-            <div className="space-y-2">
-              <h3 className="text-xl font-bold text-white">
-                {profile ? `Loaded Facebook Profile: ${profile.name}` : 'No Facebook Media Loaded'}
+            <div className="space-y-1.5">
+              <h3 className="text-lg font-bold text-white">
+                {profile ? `Profile Loaded: ${profile.name}` : 'No Media Loaded'}
               </h3>
-              <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto">
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
                 {profile ? (
                   <span>
-                    The share link points to the main profile page for <strong className="text-blue-400">{profile.name}</strong>. To extract and download video files or reels from this creator, please paste a direct Facebook <strong className="text-blue-400">Video</strong> or <strong className="text-blue-400">Reel</strong> share link.
+                    Paste a direct video or reel URL for <strong className="text-blue-400">{profile.name}</strong> or click Scrape Videos.
                   </span>
                 ) : (
                   <span>
-                    Paste a public Facebook profile, reel, page, or watch URL above and click <strong className="text-blue-400">"Scrape Videos"</strong> to extract downloadable media files.
+                    Paste a profile, reel, or video URL above and click <strong className="text-blue-400">Scrape Videos</strong>.
                   </span>
                 )}
               </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4 border-t border-slate-800 text-left text-xs">
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
-                <div className="font-bold text-white flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">1</span>
-                  Enter Facebook Link
-                </div>
-                <p className="text-[11px] text-slate-400">Copy any public video, reel, or share link from Facebook.</p>
-              </div>
-
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
-                <div className="font-bold text-white flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">2</span>
-                  yt-dlp + HTML Extraction
-                </div>
-                <p className="text-[11px] text-slate-400">Dual-engine pipeline extracts 1080p Full HD & 720p SD streams.</p>
-              </div>
-
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-1">
-                <div className="font-bold text-white flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">3</span>
-                  Batch Local Save
-                </div>
-                <p className="text-[11px] text-slate-400">Save directly to your local drive or download as a zip archive.</p>
-              </div>
             </div>
           </div>
         ) : (
@@ -653,7 +644,7 @@ export default function App() {
             onToggleSelect={handleToggleSelect}
             onQualityChange={handleQualityChange}
             onGlobalQualityChange={handleGlobalQualityChange}
-            onSingleDownload={(video) => enqueueDownloadTask(video)}
+            onSingleDownload={(video) => handleInitiateDownload(video)}
             onOpenPreview={(video) => setPreviewVideo(video)}
             activeDownloads={activeDownloadsMap}
             lowBandwidthMode={settings.lowBandwidthMode}
@@ -669,6 +660,13 @@ export default function App() {
         onDownload={(video, quality) => enqueueDownloadTask(video, quality)}
       />
 
+      <FormatModal
+        video={formatModalVideo}
+        onClose={() => setFormatModalVideo(null)}
+        onSelectFormat={(video, quality) => enqueueDownloadTask(video, quality)}
+        onOpenPreview={(video) => setPreviewVideo(video)}
+      />
+
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -681,15 +679,27 @@ export default function App() {
         onClose={() => setActiveErrorInfo(null)}
       />
 
+      <DebugPanel
+        debugInfo={currentDebugInfo}
+        isOpen={isDebugPanelOpen}
+        onClose={() => setIsDebugPanelOpen(false)}
+      />
+
       {/* Footer */}
-      <footer className="border-t border-slate-800 bg-slate-900/50 py-6 text-center text-xs text-slate-500 space-y-2">
-        <p className="flex items-center justify-center gap-1.5 text-slate-400">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <span>Facebook Batch Video Downloader • Highest Resolution Extraction • Metadata Preserved</span>
+      <footer className="border-t border-slate-800 bg-slate-900/50 py-4 px-4 text-center text-xs text-slate-500 flex items-center justify-between max-w-7xl mx-auto w-full">
+        <p className="text-slate-400">
+          Video Downloader &bull; Batch download videos directly to local storage
         </p>
-        <p className="text-slate-600">
-          Supports concurrent multi-stream downloading, custom resolutions, mobile browser optimization, and low-bandwidth mode.
-        </p>
+
+        {currentDebugInfo && (
+          <button
+            onClick={() => setIsDebugPanelOpen(true)}
+            className="text-purple-400 hover:text-purple-200 text-xs font-semibold px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 transition flex items-center gap-1.5"
+          >
+            <Terminal className="w-3.5 h-3.5 text-purple-400" />
+            <span>Developer Debug Panel</span>
+          </button>
+        )}
       </footer>
 
     </div>

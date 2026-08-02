@@ -115,32 +115,171 @@ function parseJsonOutput(stdout: string): any {
   return JSON.parse(jsonStr);
 }
 
-// Helper to follow redirects and resolve shortlinks
-async function resolveShortlink(url: string): Promise<{ resolvedUrl: string; requiresAuth: boolean }> {
-  if (!url) return { resolvedUrl: url, requiresAuth: false };
+// Helper to clean tracking parameters and extract embedded share URLs
+function cleanAndSanitizeUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let urlStr = rawUrl.trim();
+
+  // Extract embedded share_url if present in query parameters
+  if (urlStr.includes('share_url=')) {
+    try {
+      const match = urlStr.match(/share_url=([^&]+)/);
+      if (match && match[1]) {
+        const decoded = decodeURIComponent(match[1]);
+        if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+          urlStr = decoded;
+        }
+      }
+    } catch (e) {}
+  }
+
   try {
-    const res = await fetch(url, {
+    const parsed = new URL(urlStr);
+
+    // Common tracking query parameters to clean
+    const trackingParams = [
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+      'rdid', 'share_url', 'mibextid', 'sfnsn', 'ref', 'igsh', 'igshid',
+      'share_id', 's', 't', 'feature', 'fbclid', 'gclid', 'si'
+    ];
+    trackingParams.forEach(p => parsed.searchParams.delete(p));
+
+    // YouTube clean URL normalization
+    if (parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')) {
+      if (parsed.hostname.includes('youtu.be')) {
+        const videoId = parsed.pathname.replace(/^\//, '');
+        if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+      }
+      const v = parsed.searchParams.get('v');
+      if (v) return `https://www.youtube.com/watch?v=${v}`;
+      const cleanPath = parsed.pathname.replace(/\/+$/, '');
+      return `https://www.youtube.com${cleanPath}`;
+    }
+
+    // Facebook clean URL normalization
+    if (parsed.hostname.includes('facebook.com') || parsed.hostname.includes('fb.com') || parsed.hostname.includes('fb.watch')) {
+      if (parsed.pathname.includes('profile.php')) {
+        const id = parsed.searchParams.get('id');
+        if (id) {
+          return `https://www.facebook.com/profile.php?id=${id}`;
+        }
+      }
+      if (parsed.pathname.includes('/watch')) {
+        const v = parsed.searchParams.get('v');
+        if (v) {
+          return `https://www.facebook.com/watch/?v=${v}`;
+        }
+      }
+      const cleanPath = parsed.pathname.replace(/\/+$/, '');
+      if (cleanPath) return `https://www.facebook.com${cleanPath}`;
+      return 'https://www.facebook.com/';
+    }
+
+    // Instagram clean URL normalization
+    if (parsed.hostname.includes('instagram.com') || parsed.hostname.includes('instagr.am')) {
+      const cleanPath = parsed.pathname.replace(/\/+$/, '');
+      return `https://www.instagram.com${cleanPath}/`;
+    }
+
+    // TikTok clean URL normalization
+    if (parsed.hostname.includes('tiktok.com')) {
+      const cleanPath = parsed.pathname.replace(/\/+$/, '');
+      return `https://www.tiktok.com${cleanPath}`;
+    }
+
+    // Twitter / X clean URL normalization
+    if (parsed.hostname.includes('x.com') || parsed.hostname.includes('twitter.com') || parsed.hostname.includes('t.co')) {
+      const cleanPath = parsed.pathname.replace(/\/+$/, '');
+      return `https://x.com${cleanPath}`;
+    }
+
+    return parsed.toString();
+  } catch (e) {
+    return urlStr;
+  }
+}
+
+interface ResolvedPipelineResult {
+  originalUrl: string;
+  cleanedUrl: string;
+  resolvedUrl: string;
+  redirectChain: string[];
+  detectedPlatform: PlatformType;
+}
+
+// Comprehensive URL redirect resolver following HTTP redirects & HTML canonical meta tags
+async function resolveUrlPipeline(rawUrl: string): Promise<ResolvedPipelineResult> {
+  const originalUrl = rawUrl.trim();
+  const redirectChain: string[] = [originalUrl];
+  let currentUrl = originalUrl;
+
+  const isMetaUrl = currentUrl.includes('facebook.com') || 
+                    currentUrl.includes('fb.com') || 
+                    currentUrl.includes('fb.watch') || 
+                    currentUrl.includes('instagram.com') || 
+                    currentUrl.includes('instagr.am');
+
+  const headers = {
+    'User-Agent': isMetaUrl 
+      ? 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)' 
+      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9'
+  };
+
+  try {
+    const res = await fetch(currentUrl, {
       method: 'GET',
-      headers: {
-        'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
-      },
+      headers,
       redirect: 'follow'
     });
-    if (res.url) {
-      let finalUrl = res.url;
-      if (finalUrl.includes('/login') && finalUrl.includes('next=')) {
+
+    if (res.url && res.url !== currentUrl) {
+      let candidateUrl = res.url;
+      if (candidateUrl.includes('/login') && candidateUrl.includes('next=')) {
         try {
-          const parsed = new URL(finalUrl);
+          const parsed = new URL(candidateUrl);
           const nextVal = parsed.searchParams.get('next');
           if (nextVal) {
-            finalUrl = decodeURIComponent(nextVal);
+            candidateUrl = decodeURIComponent(nextVal);
           }
         } catch (e) {}
       }
-      return { resolvedUrl: finalUrl, requiresAuth: false };
+      if (!redirectChain.includes(candidateUrl)) {
+        redirectChain.push(candidateUrl);
+        currentUrl = candidateUrl;
+      }
     }
-  } catch (e) {}
-  return { resolvedUrl: url, requiresAuth: false };
+
+    const htmlText = await res.text().catch(() => '');
+    if (htmlText) {
+      const ogMatch = htmlText.match(/<meta\s+property=["']og:url["']\s+content=["']([^"']+)["']/i) || 
+                      htmlText.match(/<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']/i);
+      if (ogMatch && ogMatch[1]) {
+        const ogUrl = ogMatch[1].replace(/&amp;/g, '&');
+        if (ogUrl.startsWith('http://') || ogUrl.startsWith('https://')) {
+          if (!redirectChain.includes(ogUrl)) {
+            redirectChain.push(ogUrl);
+            currentUrl = ogUrl;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('URL redirect resolution notice:', (err as any).message || err);
+  }
+
+  const cleanedUrl = cleanAndSanitizeUrl(originalUrl);
+  const resolvedUrl = cleanAndSanitizeUrl(currentUrl);
+  const detectedPlatform = detectPlatform(resolvedUrl, '');
+
+  return {
+    originalUrl,
+    cleanedUrl,
+    resolvedUrl,
+    redirectChain,
+    detectedPlatform
+  };
 }
 
 // API Health Check
@@ -202,7 +341,9 @@ function detectPlatform(url: string, extractorKey?: string): PlatformType {
 
 // Generate candidate sub-URLs for profile / channel scraping across platforms
 function generateCandidateUrls(url: string): string[] {
-  const clean = url.trim();
+  const clean = cleanAndSanitizeUrl(url);
+  if (!clean) return [url.trim()];
+
   const lower = clean.toLowerCase();
   const candidateUrls: string[] = [clean];
 
@@ -227,10 +368,24 @@ function generateCandidateUrls(url: string): string[] {
 
   // Facebook profile / page
   if (lower.includes('facebook.com/')) {
-    if (!clean.includes('/watch') && !clean.includes('/reel') && !clean.includes('/videos') && !clean.includes('/reels')) {
-      const base = clean.endsWith('/') ? clean.slice(0, -1) : clean;
-      candidateUrls.unshift(`${base}/videos/`);
-      candidateUrls.push(`${base}/reels/`);
+    if (clean.includes('profile.php')) {
+      const idMatch = clean.match(/id=([0-9]+)/);
+      if (idMatch && idMatch[1]) {
+        const id = idMatch[1];
+        candidateUrls.unshift(`https://www.facebook.com/profile.php?id=${id}&sk=reels_tab`);
+        candidateUrls.unshift(`https://www.facebook.com/profile.php?id=${id}&sk=videos`);
+        candidateUrls.push(`https://www.facebook.com/profile.php?id=${id}`);
+      }
+    } else if (!clean.includes('/watch') && !clean.includes('/reel') && !clean.includes('/videos') && !clean.includes('/reels') && !clean.includes('/share/')) {
+      try {
+        const parsed = new URL(clean);
+        const cleanPath = parsed.pathname.replace(/\/+$/, '');
+        if (cleanPath && cleanPath !== '' && cleanPath !== '/') {
+          candidateUrls.unshift(`https://www.facebook.com${cleanPath}/videos/`);
+          candidateUrls.unshift(`https://www.facebook.com${cleanPath}/reels/`);
+          candidateUrls.push(`https://www.facebook.com${cleanPath}/`);
+        }
+      } catch (e) {}
     }
   }
 
@@ -240,6 +395,7 @@ function generateCandidateUrls(url: string): string[] {
     if (match && match[1] && !['status', 'i', 'home', 'explore', 'notifications'].includes(match[1])) {
       const username = match[1];
       candidateUrls.unshift(`https://x.com/${username}/media`);
+      candidateUrls.push(`https://x.com/${username}`);
     }
   }
 
@@ -247,37 +403,61 @@ function generateCandidateUrls(url: string): string[] {
 }
 
 // Extract media using yt-dlp
-async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookProfileInfo; videos: FacebookVideo[] }> {
+async function extractWithYtDlp(targetUrl: string): Promise<{ 
+  profile: FacebookProfileInfo | null; 
+  videos: FacebookVideo[];
+  ytDlpCommand?: string;
+  ytDlpStdoutSnippet?: string;
+  ytDlpStderrSnippet?: string;
+  lastErrorLogs?: string;
+}> {
   const candidates = generateCandidateUrls(targetUrl);
-  let lastError: any = null;
+  let lastErrorMsg = '';
+  let lastStderr = '';
+  let lastStdout = '';
+  let lastCommand = '';
 
   for (const candidateUrl of candidates) {
-    const { resolvedUrl } = await resolveShortlink(candidateUrl);
+    const pipelineRes = await resolveUrlPipeline(candidateUrl);
+    const resolvedUrl = pipelineRes.resolvedUrl;
 
     const args = [
       '--dump-single-json',
       '--no-warnings',
       '--ignore-errors',
-      '--playlist-end', '50',
+      '--playlist-end', '300',
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     ];
 
+    lastCommand = `./yt-dlp_linux ${args.join(' ')} "${resolvedUrl}"`;
+
     let stdout = '';
+    let stderr = '';
     const bufferSize = 100 * 1024 * 1024;
     try {
       const res = await runYtDlp([...args, resolvedUrl], { maxBuffer: bufferSize });
       stdout = res.stdout;
-    } catch (err) {
+      stderr = res.stderr;
+      lastStdout = stdout.slice(0, 1000);
+      lastStderr = stderr.slice(0, 1000);
+    } catch (err: any) {
+      lastErrorMsg = err.message || 'yt-dlp command execution failed';
+      lastStderr = (err.stderr || err.message || '').slice(0, 1000);
+      lastStdout = (err.stdout || '').slice(0, 1000);
+
       if (resolvedUrl !== candidateUrl) {
         try {
+          lastCommand = `./yt-dlp_linux ${args.join(' ')} "${candidateUrl}"`;
           const res = await runYtDlp([...args, candidateUrl], { maxBuffer: bufferSize });
           stdout = res.stdout;
-        } catch (e2) {
-          lastError = e2;
+          stderr = res.stderr;
+          lastStdout = stdout.slice(0, 1000);
+          lastStderr = stderr.slice(0, 1000);
+        } catch (e2: any) {
+          lastErrorMsg = e2.message || lastErrorMsg;
           continue;
         }
       } else {
-        lastError = err;
         continue;
       }
     }
@@ -285,8 +465,8 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
     let rawData: any;
     try {
       rawData = parseJsonOutput(stdout);
-    } catch (parseErr) {
-      lastError = parseErr;
+    } catch (parseErr: any) {
+      lastErrorMsg = `JSON Parse Error: ${parseErr.message}`;
       continue;
     }
 
@@ -319,11 +499,18 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
       other: 'Social Media'
     };
 
-    const authorName = primaryEntry.uploader || primaryEntry.uploader_id || primaryEntry.channel || rawData.uploader || rawData.channel || rawData.title || `${platformNames[platform]} Creator`;
-    const authorHandle = primaryEntry.uploader_id ? `@${primaryEntry.uploader_id}` : (primaryEntry.channel_id ? `@${primaryEntry.channel_id}` : `@${authorName.toLowerCase().replace(/[^a-z0-9_]/g, '')}`);
+    const authorName = primaryEntry.uploader || 
+                       primaryEntry.uploader_id || 
+                       primaryEntry.channel || 
+                       rawData.uploader || 
+                       rawData.channel || 
+                       primaryEntry.artist || 
+                       '';
+                       
+    const authorHandle = primaryEntry.uploader_id ? `@${primaryEntry.uploader_id}` : (primaryEntry.channel_id ? `@${primaryEntry.channel_id}` : (authorName ? `@${authorName.toLowerCase().replace(/[^a-z0-9_]/g, '')}` : ''));
     const authorAvatar = primaryEntry.thumbnail || (primaryEntry.thumbnails && primaryEntry.thumbnails[0]?.url) || rawData.thumbnail || '';
 
-    const profileInfo: FacebookProfileInfo = {
+    const profileInfo: FacebookProfileInfo | null = authorName ? {
       url: targetUrl,
       name: authorName,
       handle: authorHandle,
@@ -332,10 +519,10 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
       verified: true,
       followersCount: primaryEntry.view_count || primaryEntry.channel_follower_count || rawData.view_count || 0,
       totalVideosFound: rawEntries.length,
-      category: `${platformNames[platform]} Profile / Channel`,
-      bio: primaryEntry.description || rawData.description || `Extracted ${rawEntries.length} media file(s) from ${platformNames[platform]} creator channel/profile`,
+      category: `${platformNames[platform]} Media`,
+      bio: primaryEntry.description || rawData.description || `Extracted ${rawEntries.length} media file(s) from ${platformNames[platform]} creator`,
       platform
-    };
+    } : null;
 
     const extractedVideos: FacebookVideo[] = rawEntries.map((item: any, idx: number) => {
       const videoId = item.id || item.display_id || `vid-${Date.now()}-${idx + 1}`;
@@ -363,7 +550,7 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
           if (!qualityStreams.some(s => s.quality === qLabel)) {
             qualityStreams.push({
               quality: qLabel as VideoQuality,
-              label: `${match.height || h}p ${h >= 720 ? 'HD High Quality' : 'SD Standard'} Stream`,
+              label: `${match.height || h}p ${h >= 720 ? 'HD Stream' : 'SD Stream'}`,
               resolution: match.width && match.height ? `${match.width}x${match.height}` : `${Math.round(h * 16 / 9)}x${h}`,
               bitrate: match.bitrate ? `${Math.round(match.bitrate / 1000)} Kbps` : `${h >= 720 ? 'High' : 'Standard'} Quality`,
               fileSizeEstimateMB: approxBytes ? parseFloat((approxBytes / (1024 * 1024)).toFixed(1)) : 0,
@@ -382,29 +569,11 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
         const proxyUrl = `/api/download-proxy?url=${encodeURIComponent(webpageUrl || streamUrl)}&filename=${encodeURIComponent(safeTitle)}.mp4`;
 
         qualityStreams.push({
-          quality: '1080p',
-          label: '1080p FHD High Quality Stream',
-          resolution: item.width && item.height ? `${item.width}x${item.height}` : '1920x1080',
+          quality: 'Best',
+          label: 'Direct HD Stream',
+          resolution: item.width && item.height ? `${item.width}x${item.height}` : 'HD',
           bitrate: 'High Quality',
-          fileSizeEstimateMB: 0,
-          url: (streamUrl && streamUrl.startsWith('http') && streamUrl.includes('.mp4')) ? streamUrl : proxyUrl
-        });
-
-        qualityStreams.push({
-          quality: '720p',
-          label: '720p HD Standard Stream',
-          resolution: '1280x720',
-          bitrate: 'Standard',
-          fileSizeEstimateMB: 0,
-          url: (streamUrl && streamUrl.startsWith('http') && streamUrl.includes('.mp4')) ? streamUrl : proxyUrl
-        });
-
-        qualityStreams.push({
-          quality: '480p',
-          label: '480p SD Mobile Stream',
-          resolution: '854x480',
-          bitrate: 'Mobile',
-          fileSizeEstimateMB: 0,
+          fileSizeEstimateMB: item.filesize || item.filesize_approx ? parseFloat((((item.filesize || item.filesize_approx) / (1024 * 1024))).toFixed(1)) : 0,
           url: (streamUrl && streamUrl.startsWith('http') && streamUrl.includes('.mp4')) ? streamUrl : proxyUrl
         });
       }
@@ -413,8 +582,8 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
         id: videoId,
         title,
         description,
-        authorName: item.uploader || item.channel || authorName,
-        authorHandle: item.uploader_id ? `@${item.uploader_id}` : authorHandle,
+        authorName: item.uploader || item.channel || authorName || `${platformNames[platform]} Media`,
+        authorHandle: item.uploader_id ? `@${item.uploader_id}` : (authorHandle || '@media'),
         authorAvatar: thumb || authorAvatar,
         thumbnailUrl: thumb,
         durationSeconds: duration,
@@ -432,54 +601,46 @@ async function extractWithYtDlp(targetUrl: string): Promise<{ profile: FacebookP
       };
     });
 
-    return { profile: profileInfo, videos: extractedVideos };
+    return { 
+      profile: profileInfo, 
+      videos: extractedVideos,
+      ytDlpCommand: lastCommand,
+      ytDlpStdoutSnippet: lastStdout,
+      ytDlpStderrSnippet: lastStderr
+    };
   }
 
-  if (lastError) throw lastError;
-  throw new Error('yt-dlp could not extract media entries from this URL.');
+  return {
+    profile: null,
+    videos: [],
+    ytDlpCommand: lastCommand,
+    ytDlpStdoutSnippet: lastStdout,
+    ytDlpStderrSnippet: lastStderr,
+    lastErrorLogs: lastErrorMsg
+  };
 }
 
 // HTML Fallback Extractor for Facebook profile pages, reels, and feeds
-async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: FacebookProfileInfo; videos: FacebookVideo[] }> {
-  const googlebotHeaders = {
-    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9'
-  };
-
+async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: FacebookProfileInfo | null; videos: FacebookVideo[] }> {
   const fbExternalHeaders = {
     'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9'
   };
 
-  const pageIdMatch = targetUrl.match(/([0-9]{10,25})/);
+  const cleanTarget = cleanAndSanitizeUrl(targetUrl);
+  const pageIdMatch = cleanTarget.match(/([0-9]{10,25})/);
   const pageId = pageIdMatch ? pageIdMatch[1] : '';
 
-  const urlsToFetch: string[] = [targetUrl];
-  const isProfileOrPage = targetUrl.includes('/people/') || targetUrl.includes('/profile.php') || targetUrl.includes('facebook.com/');
-
-  if (isProfileOrPage) {
-    const cleanBase = targetUrl.endsWith('/') ? targetUrl.slice(0, -1) : targetUrl;
-    urlsToFetch.push(`${cleanBase}/videos/`);
-    urlsToFetch.push(`${cleanBase}/reels/`);
-    if (pageId) {
-      urlsToFetch.push(`https://www.facebook.com/profile.php?id=${pageId}&sk=videos`);
-      urlsToFetch.push(`https://www.facebook.com/profile.php?id=${pageId}&sk=reels_tab`);
-    }
-  }
+  const urlsToFetch = generateCandidateUrls(cleanTarget);
 
   const fetchPromises: Promise<string>[] = [];
-  const uas = [googlebotHeaders, fbExternalHeaders];
-
   for (const u of urlsToFetch) {
-    for (const headersObj of uas) {
-      fetchPromises.push(
-        fetch(u, { headers: headersObj })
-          .then(r => r.ok ? r.text() : '')
-          .catch(() => '')
-      );
-    }
+    fetchPromises.push(
+      fetch(u, { headers: fbExternalHeaders })
+        .then(r => r.ok ? r.text() : '')
+        .catch(() => '')
+    );
   }
 
   const htmlResults = await Promise.allSettled(fetchPromises);
@@ -503,9 +664,9 @@ async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: Fa
   const siteMatch = combinedHtml.match(/meta property="og:site_name" content="([^"]+)"/);
   const ogImageMatch = combinedHtml.match(/meta property="og:image" content="([^"]+)"/);
 
-  const rawTitle = titleMatch ? titleMatch[1].replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace('| Facebook', '').trim() : 'Facebook Creator';
+  const rawTitle = titleMatch ? titleMatch[1].replace(/&amp;/g, '&').replace(/&#039;/g, "'").replace('| Facebook', '').trim() : '';
   const rawDesc = descMatch ? descMatch[1].replace(/&amp;/g, '&').replace(/&#039;/g, "'").trim() : '';
-  const authorName = siteMatch ? siteMatch[1].trim() : (rawTitle !== 'Facebook' ? rawTitle : 'Facebook Creator');
+  const authorName = siteMatch ? siteMatch[1].trim() : (rawTitle !== 'Facebook' ? rawTitle : '');
   const mainOgImage = ogImageMatch ? ogImageMatch[1].replace(/\\/g, '').replace(/&amp;/g, '&') : '';
 
   const hdMatches = [
@@ -522,35 +683,29 @@ async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: Fa
     ...combinedHtml.matchAll(/meta property="og:video:url" content="([^"]+)"/g)
   ];
 
-  const thumbMatches = [
-    ...combinedHtml.matchAll(/preferred_thumbnail":\{"image":\{"uri":"([^"]+)"/g),
-    ...combinedHtml.matchAll(/"image":\{"uri":"([^"]+)"/g),
-    ...combinedHtml.matchAll(/thumbnailUrl":"([^"]+)"/g),
-    ...combinedHtml.matchAll(/meta property="og:image" content="([^"]+)"/g)
-  ];
-
   const cleanHdList = Array.from(new Set(hdMatches.map(m => m[1].replace(/\\/g, '').replace(/&amp;/g, '&'))));
   const cleanSdList = Array.from(new Set(sdMatches.map(m => m[1].replace(/\\/g, '').replace(/&amp;/g, '&'))));
-  const cleanThumbList = Array.from(new Set(thumbMatches.map(m => m[1].replace(/\\/g, '').replace(/&amp;/g, '&'))));
 
   const extractedIdSet = new Set<string>();
 
   [...combinedHtml.matchAll(/"video_id":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/"videoId":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/\/(videos|reel|watch)\/([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[2]));
-  [...combinedHtml.matchAll(/href="\/watch\/\?v=([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/href="\/reel\/([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
 
   if (pageId) {
     extractedIdSet.delete(pageId);
   }
 
   let rawVideoIds = Array.from(extractedIdSet);
+  if (rawVideoIds.length === 0 && cleanHdList.length === 0 && cleanSdList.length === 0) {
+    return { profile: null, videos: [] };
+  }
+
   const isReel = targetUrl.includes('/reel/') || targetUrl.includes('/reels/');
   const extractedVideos: FacebookVideo[] = [];
 
-  for (let idx = 0; idx < rawVideoIds.length; idx++) {
-    const vId = rawVideoIds[idx];
+  for (let idx = 0; idx < Math.max(rawVideoIds.length, cleanHdList.length, cleanSdList.length); idx++) {
+    const vId = rawVideoIds[idx] || `vid-${Date.now()}-${idx + 1}`;
     const watchPermalink = `https://www.facebook.com/watch/?v=${vId}`;
     
     const hdCandidate = cleanHdList[idx] || '';
@@ -561,42 +716,30 @@ async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: Fa
     const hdUrl = isValidStream(hdCandidate) ? hdCandidate : (isValidStream(sdCandidate) ? sdCandidate : '');
     const sdUrl = isValidStream(sdCandidate) ? sdCandidate : hdUrl;
 
-    const videoTitle = rawVideoIds.length === 1 
-      ? (rawTitle || authorName) 
-      : `${authorName} - Reel / Post (${vId.slice(-6)})`;
+    if (!hdUrl && !sdUrl) continue;
 
-    const videoThumb = cleanThumbList[idx] || mainOgImage || '';
-    const proxyUrl = `/api/download-proxy?url=${encodeURIComponent(watchPermalink)}&filename=${encodeURIComponent(videoTitle.replace(/[/\\?%*:|"<>]/g, '_'))}.mp4`;
+    const videoTitle = rawVideoIds.length === 1 
+      ? (rawTitle || authorName || 'Facebook Video') 
+      : `${authorName || 'Facebook'} - Post (${vId.slice(-6)})`;
 
     const qualityStreams: QualityStream[] = [];
     qualityStreams.push({
-      quality: '1080p',
-      label: '1080p HD Stream',
+      quality: 'Best',
+      label: 'HD Stream',
       resolution: '1920x1080',
       bitrate: 'High Quality',
       fileSizeEstimateMB: 0,
-      url: hdUrl || proxyUrl
+      url: hdUrl || sdUrl
     });
-
-    if (sdUrl && sdUrl !== hdUrl) {
-      qualityStreams.push({
-        quality: '720p',
-        label: '720p SD Stream',
-        resolution: '1280x720',
-        bitrate: 'Standard',
-        fileSizeEstimateMB: 0,
-        url: sdUrl
-      });
-    }
 
     extractedVideos.push({
       id: vId,
       title: videoTitle,
       description: rawDesc || videoTitle,
-      authorName,
-      authorHandle: `@${authorName.toLowerCase().replace(/[^a-z0-9_]/g, '') || 'facebook'}`,
-      authorAvatar: mainOgImage || videoThumb || '',
-      thumbnailUrl: videoThumb || mainOgImage || '',
+      authorName: authorName || 'Facebook Creator',
+      authorHandle: `@${(authorName || 'facebook').toLowerCase().replace(/[^a-z0-9_]/g, '')}`,
+      authorAvatar: mainOgImage || '',
+      thumbnailUrl: mainOgImage || '',
       durationSeconds: 0,
       durationFormatted: 'HD Stream',
       uploadDate: new Date().toISOString().split('T')[0],
@@ -612,17 +755,21 @@ async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: Fa
     });
   }
 
+  if (extractedVideos.length === 0) {
+    return { profile: null, videos: [] };
+  }
+
   const profileInfo: FacebookProfileInfo = {
     url: targetUrl,
-    name: authorName,
-    handle: `@${authorName.toLowerCase().replace(/[^a-z0-9_]/g, '') || 'facebook'}`,
+    name: authorName || 'Facebook Media',
+    handle: `@${(authorName || 'facebook').toLowerCase().replace(/[^a-z0-9_]/g, '')}`,
     avatarUrl: mainOgImage,
     coverUrl: '',
     verified: true,
     followersCount: 0,
     totalVideosFound: extractedVideos.length,
-    category: extractedVideos.length > 0 ? (extractedVideos.length === 1 ? 'Public Video / Clip' : 'Creator Feed / Playlist') : 'Profile / Page',
-    bio: rawDesc || (extractedVideos.length > 0 ? `Extracted all ${extractedVideos.length} media item(s) for ${authorName}` : `Profile page resolved for ${authorName}`)
+    category: 'Facebook Media',
+    bio: rawDesc || `Extracted ${extractedVideos.length} media item(s)`
   };
 
   return { profile: profileInfo, videos: extractedVideos };
@@ -646,35 +793,28 @@ async function handleScrapeOrExtract(req: express.Request, res: express.Response
       });
     }
 
-    let cleanUrl = url.trim();
+    // Step 1 & 2 & 3: Run comprehensive URL resolution pipeline
+    const pipeline = await resolveUrlPipeline(url);
+    const { originalUrl, cleanedUrl, resolvedUrl, redirectChain, detectedPlatform } = pipeline;
 
-    // Automatically resolve Facebook share URLs (/share/) to their target canonical URL
-    if (cleanUrl.includes('/share/')) {
-      try {
-        const resRedirect = await fetch(cleanUrl, {
-          headers: {
-            'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-          },
-          redirect: 'follow'
-        });
-        if (resRedirect.url && resRedirect.url !== cleanUrl) {
-          console.log(`Resolved share link ${cleanUrl} -> ${resRedirect.url}`);
-          cleanUrl = resRedirect.url;
-        }
-      } catch (rErr) {}
-    }
-
-    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+    if (!resolvedUrl.startsWith('http://') && !resolvedUrl.startsWith('https://')) {
       return res.status(400).json({
         success: false,
         message: 'Invalid link format. Please include http:// or https://',
         errorType: 'INVALID_URL',
-        errorDetails: `URL "${cleanUrl}" missing valid HTTP scheme protocol.`,
+        errorDetails: `URL "${resolvedUrl}" missing valid HTTP scheme protocol.`,
         suggestions: [
           'Ensure the URL begins with https://',
           'Copy and paste the link directly from your browser'
-        ]
+        ],
+        debugInfo: {
+          originalUrl,
+          cleanedUrl,
+          resolvedUrl,
+          redirectChain,
+          detectedPlatform,
+          scrapedAt: new Date().toISOString()
+        }
       });
     }
 
@@ -691,75 +831,88 @@ async function handleScrapeOrExtract(req: express.Request, res: express.Response
 
     let finalProfile: FacebookProfileInfo | null = null;
     let finalVideos: FacebookVideo[] = [];
+    let ytDlpCommandExecuted = '';
+    let ytDlpStdoutSnippet = '';
+    let ytDlpStderrSnippet = '';
+    let extractionErrorMsg = '';
 
-    // Attempt 1: Core yt-dlp extraction with candidate URLs
+    // Step 4: Core yt-dlp extraction with canonical resolved URL
     try {
-      const ytResult = await extractWithYtDlp(cleanUrl);
+      const ytResult = await extractWithYtDlp(resolvedUrl);
+      ytDlpCommandExecuted = ytResult.ytDlpCommand || '';
+      ytDlpStdoutSnippet = ytResult.ytDlpStdoutSnippet || '';
+      ytDlpStderrSnippet = ytResult.ytDlpStderrSnippet || '';
+      extractionErrorMsg = ytResult.lastErrorLogs || '';
+
       if (ytResult && ytResult.videos && ytResult.videos.length > 0) {
         finalProfile = ytResult.profile;
         finalVideos = ytResult.videos;
-      } else if (ytResult && ytResult.profile) {
-        finalProfile = ytResult.profile;
       }
-    } catch (ytErr) {
-      console.log('yt-dlp core extraction notice:', (ytErr as any).message || ytErr);
+    } catch (ytErr: any) {
+      extractionErrorMsg = ytErr.message || String(ytErr);
+      ytDlpStderrSnippet = (ytErr.stderr || ytErr.message || '').slice(0, 1000);
     }
 
-    // Attempt 2: HTML Fallback scraper if yt-dlp yielded 0 videos
-    if (finalVideos.length === 0) {
+    // Step 5: HTML Fallback scraper if yt-dlp yielded 0 videos on Meta platform
+    if (finalVideos.length === 0 && (detectedPlatform === 'facebook' || detectedPlatform === 'instagram')) {
       try {
-        const fallbackResult = await extractWithHtmlFallback(cleanUrl);
+        const fallbackResult = await extractWithHtmlFallback(resolvedUrl);
         if (fallbackResult && fallbackResult.videos && fallbackResult.videos.length > 0) {
-          if (!finalProfile || fallbackResult.videos.length > finalVideos.length) {
-            finalProfile = fallbackResult.profile;
-          }
-          finalVideos = fallbackResult.videos;
-        } else if (!finalProfile && fallbackResult && fallbackResult.profile) {
           finalProfile = fallbackResult.profile;
+          finalVideos = fallbackResult.videos;
         }
-      } catch (fbErr) {
-        console.log('HTML fallback notice:', (fbErr as any).message || fbErr);
+      } catch (fbErr: any) {
+        console.log('HTML fallback notice:', fbErr.message || fbErr);
       }
     }
 
     const filteredVideos = applyDateFilter(finalVideos);
-    const platform = detectPlatform(cleanUrl, '');
+
+    const debugInfo = {
+      originalUrl,
+      cleanedUrl,
+      resolvedUrl,
+      redirectChain,
+      detectedPlatform,
+      ytDlpCommand: ytDlpCommandExecuted,
+      ytDlpStdoutSnippet,
+      ytDlpStderrSnippet,
+      extractionError: extractionErrorMsg,
+      scrapedAt: new Date().toISOString()
+    };
 
     if (filteredVideos.length > 0) {
       return res.json({
         success: true,
-        platform,
-        title: finalProfile?.name || 'Media Gallery',
+        platform: detectedPlatform,
+        title: finalProfile?.name || `${filteredVideos.length} Extracted Media File(s)`,
         profile: finalProfile ? {
           ...finalProfile,
           totalVideosFound: filteredVideos.length
         } : null,
         videos: filteredVideos,
-        scrapedAt: new Date().toISOString()
+        scrapedAt: new Date().toISOString(),
+        debugInfo
       });
     }
 
-    // If 0 public videos found after both engines
+    // Step 6: Return genuine error response if 0 public videos found (NO FAKE PROFILES!)
     return res.status(200).json({
-      success: true,
-      platform,
-      title: finalProfile?.name || 'Profile',
-      profile: finalProfile || {
-        url: cleanUrl,
-        name: 'Profile / Creator Page',
-        handle: '@creator',
-        avatarUrl: '',
-        coverUrl: '',
-        verified: false,
-        followersCount: 0,
-        totalVideosFound: 0,
-        category: 'Public Profile',
-        bio: 'No public video streams found on this profile link.',
-        platform
-      },
+      success: false,
+      platform: detectedPlatform,
+      title: 'No Videos Found',
+      profile: null,
       videos: [],
       scrapedAt: new Date().toISOString(),
-      message: 'No public video streams were detected at this link. Please check if the profile has public reels/videos or try pasting a direct video link.'
+      message: 'No public video streams were detected at this link. Please check if the post or profile is public and accessible.',
+      errorType: 'NO_VIDEOS_FOUND',
+      errorDetails: extractionErrorMsg || 'yt-dlp returned 0 entries for this resolved URL.',
+      suggestions: [
+        'Ensure the post or profile is public and not private or restricted',
+        'If copying a share link, try opening the video in browser first and copying the direct video URL',
+        'Check the Developer Debug Panel for raw command logs and redirect steps'
+      ],
+      debugInfo
     });
 
   } catch (err: any) {

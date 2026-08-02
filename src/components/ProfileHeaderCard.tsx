@@ -212,8 +212,7 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
             </div>
 
             <div className="text-slate-400 text-[11px] flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-md border border-slate-800">
-              <Sparkles className="w-3 h-3 text-amber-400" />
-              <span>Highest available resolution (1080p Full HD) selected by default</span>
+              <span>All videos selected by default</span>
             </div>
 
           </div>
