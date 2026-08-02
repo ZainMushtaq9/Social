@@ -476,18 +476,39 @@ async function extractWithHtmlFallback(targetUrl: string): Promise<{ profile: Fa
 
   // Extract video & reel specific IDs across all GraphQL and JSON scripts
   const extractedIdSet = new Set<string>();
+
+  // Primary explicit video and reel IDs
   [...combinedHtml.matchAll(/"video_id":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/"videoId":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/\/(videos|reel|watch)\/([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[2]));
-  [...combinedHtml.matchAll(/"content_id":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/"legacy_fbid":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/"share_fbid":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/"post_id":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/"story_fbid":"([0-9]{10,25})"/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/video_id=([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
-  [...combinedHtml.matchAll(/story_fbid=([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/href="\/watch\/\?v=([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
   [...combinedHtml.matchAll(/href="\/reel\/([0-9]{10,25})/g)].forEach(m => extractedIdSet.add(m[1]));
+
+  // Secondary post / story IDs: ONLY include if the surrounding context indicates a video
+  const postMatches = [
+    ...combinedHtml.matchAll(/"(post_id|story_fbid|legacy_fbid|share_fbid|content_id)":"([0-9]{10,25})"/g),
+    ...combinedHtml.matchAll(/(video_id|story_fbid)=([0-9]{10,25})/g)
+  ];
+
+  for (const m of postMatches) {
+    const pId = m[2];
+    if (extractedIdSet.has(pId)) continue;
+    const index = m.index || 0;
+    const start = Math.max(0, index - 300);
+    const end = Math.min(combinedHtml.length, index + 300);
+    const context = combinedHtml.slice(start, end);
+    if (
+      context.includes('video') ||
+      context.includes('Video') ||
+      context.includes('playable_url') ||
+      context.includes('reel') ||
+      context.includes('Reel') ||
+      context.includes('is_video":true') ||
+      context.includes('media_type":"video')
+    ) {
+      extractedIdSet.add(pId);
+    }
+  }
 
   // Filter out the page ID itself if extracted
   if (pageId) {

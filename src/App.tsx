@@ -255,7 +255,16 @@ export default function App() {
         });
 
         if (!response.ok && response.status !== 206) {
-          throw new Error(`Proxy stream failed with status HTTP ${response.status}`);
+          let errorMsg = `Download failed (HTTP ${response.status})`;
+          try {
+            const errJson = await response.json();
+            if (errJson.error) {
+              errorMsg = errJson.error;
+            }
+          } catch (e) {
+            // ignore JSON parse error
+          }
+          throw new Error(errorMsg);
         }
 
         const contentLengthHeader = response.headers.get('content-length');
