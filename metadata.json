@@ -1,6 +1,6 @@
 {
-  "name": "Universal Video Downloader",
-  "description": "SnapTube and VidMate style universal video downloader web app supporting YouTube, Instagram, TikTok, Facebook, and X (Twitter) with yt-dlp metadata extraction, quality resolution selection, single-page gallery, video preview modal, and background downloads.",
+  "name": "New Application",
+  "description": "A fresh application ready for development.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
