@@ -46,20 +46,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               Max Concurrent Downloads ({settings.concurrencyLimit} active streams)
             </label>
             <p className="text-slate-400 text-[11px]">
-              Controls how many videos download simultaneously. Higher values speed up large playlists on fast internet.
+              Controls how many videos download simultaneously. Select higher values to download all videos at once.
             </p>
-            <div className="flex items-center gap-2 pt-1">
-              {[1, 2, 3, 4, 5].map((val) => (
+            <div className="grid grid-cols-4 gap-2 pt-1">
+              {[1, 3, 5, 8, 10, 15, 25, 50].map((val) => (
                 <button
                   key={val}
+                  type="button"
                   onClick={() => onUpdateSettings({ concurrencyLimit: val })}
-                  className={`flex-1 py-2 rounded-xl border font-bold text-center transition-all ${
+                  className={`py-2 px-1 rounded-xl border font-bold text-center transition-all ${
                     settings.concurrencyLimit === val
-                      ? 'bg-blue-600 border-blue-500 text-white shadow-md'
+                      ? 'bg-blue-600 border-blue-500 text-white shadow-md ring-1 ring-blue-400'
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
-                  {val}x Stream{val > 1 ? 's' : ''}
+                  {val === 50 ? 'All (50x)' : `${val}x`}
                 </button>
               ))}
             </div>

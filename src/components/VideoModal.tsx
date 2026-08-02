@@ -62,7 +62,7 @@ export const VideoModal: React.FC<VideoModalProps> = ({
               src={activeStream?.url}
               controls
               autoPlay={false}
-              poster={video.thumbnailUrl}
+              poster={(video.thumbnailUrl && video.thumbnailUrl.trim() !== '') ? video.thumbnailUrl : undefined}
               className="w-full h-full object-contain"
             />
           </div>

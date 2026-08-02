@@ -1,6 +1,8 @@
 {
-  "name": "Facebook Video Downloader & Batch Scraper",
-  "description": "Scrape, preview, select, and batch download high-resolution videos from Facebook profiles with concurrent downloads, resolution choices, and progress tracking.",
+  "name": "Universal Video Downloader",
+  "description": "SnapTube and VidMate style universal video downloader web app supporting YouTube, Instagram, TikTok, Facebook, and X (Twitter) with yt-dlp metadata extraction, quality resolution selection, single-page gallery, video preview modal, and background downloads.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

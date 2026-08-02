@@ -2,9 +2,9 @@ import React from 'react';
 import { 
   X, Download, Pause, Play, RefreshCw, CheckCircle2, AlertCircle, 
   HardDrive, Info, Film, ExternalLink, Calendar, Eye, ThumbsUp, 
-  Layers, ShieldCheck, Sparkles, Clock
+  Layers, ShieldCheck, Sparkles, Clock, Bug, Video
 } from 'lucide-react';
-import { DownloadTask, PlatformType } from '../types';
+import { DownloadTask, PlatformType, AppErrorInfo } from '../types';
 
 interface DownloadDetailsModalProps {
   task: DownloadTask | null;
@@ -14,6 +14,7 @@ interface DownloadDetailsModalProps {
   onCancelTask: (id: string) => void;
   onRetryTask: (id: string) => void;
   onOpenPreview?: (video: any) => void;
+  onOpenReportModal?: (info: AppErrorInfo) => void;
 }
 
 export const getPlatformBadge = (platform?: PlatformType) => {
@@ -43,7 +44,8 @@ export const DownloadDetailsModal: React.FC<DownloadDetailsModalProps> = ({
   onResumeTask,
   onCancelTask,
   onRetryTask,
-  onOpenPreview
+  onOpenPreview,
+  onOpenReportModal
 }) => {
   if (!task) return null;
 
@@ -85,12 +87,21 @@ export const DownloadDetailsModal: React.FC<DownloadDetailsModalProps> = ({
         {/* Video Card Overview */}
         <div className="flex gap-4 bg-slate-950 p-3.5 rounded-xl border border-slate-800 items-center">
           <div className="relative w-24 aspect-video rounded-lg bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-800">
-            <img
-              src={video.thumbnailUrl || video.authorAvatar}
-              alt={video.title}
-              className="w-full h-full object-cover"
-              referrerPolicy="no-referrer"
-            />
+            {(() => {
+              const thumb = (video.thumbnailUrl && video.thumbnailUrl.trim() !== '') ? video.thumbnailUrl : ((video.authorAvatar && video.authorAvatar.trim() !== '') ? video.authorAvatar : null);
+              return thumb ? (
+                <img
+                  src={thumb}
+                  alt={video.title}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-500 bg-slate-900">
+                  <Video className="w-6 h-6 text-slate-500" />
+                </div>
+              );
+            })()}
             <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-slate-950/90 text-[10px] font-mono font-bold text-emerald-400">
               {chosenQuality}
             </span>
@@ -199,12 +210,37 @@ export const DownloadDetailsModal: React.FC<DownloadDetailsModalProps> = ({
             )}
 
             {status === 'failed' && (
-              <button
-                onClick={() => onRetryTask(task.id)}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-all"
-              >
-                <RefreshCw className="w-4 h-4" /> Retry Download
-              </button>
+              <>
+                <button
+                  onClick={() => onRetryTask(task.id)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition-all"
+                >
+                  <RefreshCw className="w-4 h-4" /> Retry Download
+                </button>
+
+                {onOpenReportModal && (
+                  <button
+                    onClick={() => {
+                      onOpenReportModal({
+                        type: 'DOWNLOAD_FAILED',
+                        title: 'Stream Download Failed',
+                        message: errorMessage || 'The video CDN stream request failed or timed out.',
+                        details: `Task ID: ${task.id}\nStream URL: ${chosenStream.url}\nResolution: ${chosenStream.resolution}\nQuality: ${chosenQuality}`,
+                        targetUrl: video.originalPostUrl,
+                        videoId: video.id,
+                        suggestions: [
+                          'Click "Retry Download" to re-initiate stream proxy request',
+                          'Check if the original post on Facebook was deleted or made private',
+                          'Try selecting a lower quality stream (e.g., 720p or SD) in settings'
+                        ]
+                      });
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Bug className="w-4 h-4" /> Debug & Report Error
+                  </button>
+                )}
+              </>
             )}
 
             {status === 'completed' && blobUrl && (

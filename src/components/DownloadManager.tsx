@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { 
   Download, Pause, Play, X, CheckCircle2, AlertCircle, 
-  RefreshCw, Archive, FileText, Sliders, HardDrive, Zap, ShieldCheck, Info 
+  RefreshCw, Archive, FileText, Sliders, HardDrive, Zap, ShieldCheck, Info, Video, Bug
 } from 'lucide-react';
-import { DownloadTask, GlobalDownloadSettings } from '../types';
+import { motion, AnimatePresence } from 'motion/react';
+import { DownloadTask, GlobalDownloadSettings, AppErrorInfo } from '../types';
 import { DownloadDetailsModal, getPlatformBadge } from './DownloadDetailsModal';
 
 interface DownloadManagerProps {
@@ -19,6 +20,7 @@ interface DownloadManagerProps {
   onDownloadZip: () => void;
   isZipping?: boolean;
   onOpenPreview?: (video: any) => void;
+  onOpenReportModal?: (info: AppErrorInfo) => void;
 }
 
 export const DownloadManager: React.FC<DownloadManagerProps> = ({
@@ -33,7 +35,8 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
   onClearCompleted,
   onDownloadZip,
   isZipping,
-  onOpenPreview
+  onOpenPreview,
+  onOpenReportModal
 }) => {
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<DownloadTask | null>(null);
 
@@ -160,173 +163,215 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
 
       {/* Task Cards List */}
       <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-        {tasks.map((task) => {
-          const platformInfo = getPlatformBadge(task.platform || task.video.platform);
+        <AnimatePresence mode="popLayout" initial={false}>
+          {tasks.map((task) => {
+            const platformInfo = getPlatformBadge(task.platform || task.video.platform);
 
-          return (
-            <div
-              key={task.id}
-              className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-slate-700 transition-colors"
-            >
-              {/* Left Info */}
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div 
-                  className="relative w-12 h-12 rounded-lg bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-800 cursor-pointer"
-                  onClick={() => setSelectedTaskForDetails(task)}
-                >
-                  <img
-                    src={task.video.thumbnailUrl || task.video.authorAvatar}
-                    alt={task.video.title}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                  <span className="absolute bottom-0 right-0 px-1 bg-slate-950/90 text-[9px] font-bold text-blue-400">
-                    {task.chosenQuality}
-                  </span>
-                </div>
-
-                <div className="min-w-0 space-y-1 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${platformInfo.color}`}>
-                      {platformInfo.name}
-                    </span>
-                    <h5 
-                      className="font-semibold text-white truncate cursor-pointer hover:text-blue-400 transition-colors"
-                      title={task.video.title}
-                      onClick={() => setSelectedTaskForDetails(task)}
-                    >
-                      {task.video.title}
-                    </h5>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                    <span className="text-blue-400 font-mono">{task.chosenStream?.resolution || '1080p'}</span>
-                    <span>•</span>
-                    <span>
-                      {(task.downloadedBytes / (1024 * 1024)).toFixed(1)} MB / ~{(task.chosenStream?.fileSizeEstimateMB || 20).toFixed(1)} MB
-                    </span>
-                    <span>•</span>
-                    <span className="text-emerald-400 font-mono">
-                      {task.status === 'downloading' ? `${((task.speedBps || 0) / (1024 * 1024)).toFixed(1)} MB/s` : task.status}
+            return (
+              <motion.div
+                key={task.id}
+                layout
+                initial={{ opacity: 0, y: -12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95, x: 20, transition: { duration: 0.2 } }}
+                transition={{
+                  layout: { type: 'spring', stiffness: 500, damping: 35 },
+                  opacity: { duration: 0.2 },
+                }}
+                className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-slate-700 transition-colors"
+              >
+                {/* Left Info */}
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div 
+                    className="relative w-12 h-12 rounded-lg bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-800 cursor-pointer"
+                    onClick={() => setSelectedTaskForDetails(task)}
+                  >
+                    {(() => {
+                      const thumb = (task.video.thumbnailUrl && task.video.thumbnailUrl.trim() !== '') ? task.video.thumbnailUrl : ((task.video.authorAvatar && task.video.authorAvatar.trim() !== '') ? task.video.authorAvatar : null);
+                      return thumb ? (
+                        <img
+                          src={thumb}
+                          alt={task.video.title}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-500 bg-slate-900">
+                          <Video className="w-5 h-5 text-slate-500" />
+                        </div>
+                      );
+                    })()}
+                    <span className="absolute bottom-0 right-0 px-1 bg-slate-950/90 text-[9px] font-bold text-blue-400">
+                      {task.chosenQuality}
                     </span>
                   </div>
 
-                  {/* Progress bar line */}
-                  <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
-                    <div
-                      className={`h-full transition-all duration-200 ${
-                        task.status === 'completed'
-                          ? 'bg-emerald-500'
-                          : task.status === 'paused'
-                          ? 'bg-amber-500'
-                          : task.status === 'failed'
-                          ? 'bg-rose-500'
-                          : 'bg-blue-500'
-                      }`}
-                      style={{ width: `${task.progressPercent}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Status Badge & Actions */}
-              <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0">
-                
-                {/* Status Indicator & Pause/Resume Controls */}
-                <div className="flex items-center gap-1.5">
-                  {task.status === 'completed' && (
-                    <>
-                      <span className="px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Saved
+                  <div className="min-w-0 space-y-1 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${platformInfo.color}`}>
+                        {platformInfo.name}
                       </span>
-                      {task.blobUrl && (
-                        <a
-                          href={task.blobUrl}
-                          download={task.savedFileName || `${task.video.title}.mp4`}
-                          className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
-                          title="Save MP4 directly to Local Drive"
+                      <h5 
+                        className="font-semibold text-white truncate cursor-pointer hover:text-blue-400 transition-colors"
+                        title={task.video.title}
+                        onClick={() => setSelectedTaskForDetails(task)}
+                      >
+                        {task.video.title}
+                      </h5>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                      <span className="text-blue-400 font-mono">{task.chosenStream?.resolution || '1080p'}</span>
+                      <span>•</span>
+                      <span>
+                        {(task.downloadedBytes / (1024 * 1024)).toFixed(1)} MB / ~{(task.chosenStream?.fileSizeEstimateMB || 20).toFixed(1)} MB
+                      </span>
+                      <span>•</span>
+                      <span className="text-emerald-400 font-mono">
+                        {task.status === 'downloading' ? `${((task.speedBps || 0) / (1024 * 1024)).toFixed(1)} MB/s` : task.status}
+                      </span>
+                    </div>
+
+                    {/* Progress bar line */}
+                    <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className={`h-full transition-all duration-200 ${
+                          task.status === 'completed'
+                            ? 'bg-emerald-500'
+                            : task.status === 'paused'
+                            ? 'bg-amber-500'
+                            : task.status === 'failed'
+                            ? 'bg-rose-500'
+                            : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${task.progressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Status Badge & Actions */}
+                <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0">
+                  
+                  {/* Status Indicator & Pause/Resume Controls */}
+                  <div className="flex items-center gap-1.5">
+                    {task.status === 'completed' && (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Saved
+                        </span>
+                        {task.blobUrl && (
+                          <a
+                            href={task.blobUrl}
+                            download={task.savedFileName || `${task.video.title}.mp4`}
+                            className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
+                            title="Save MP4 directly to Local Drive"
+                          >
+                            <Download className="w-3 h-3" /> Save MP4
+                          </a>
+                        )}
+                      </>
+                    )}
+
+                    {task.status === 'downloading' && (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30 font-semibold animate-pulse">
+                          {task.progressPercent}%
+                        </span>
+                        <button
+                          onClick={() => onPauseTask(task.id)}
+                          className="px-2 py-1 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-1 transition-colors"
+                          title="Pause downloading stream"
                         >
-                          <Download className="w-3 h-3" /> Save MP4
-                        </a>
-                      )}
-                    </>
-                  )}
+                          <Pause className="w-3 h-3" /> Pause
+                        </button>
+                      </>
+                    )}
 
-                  {task.status === 'downloading' && (
-                    <>
-                      <span className="px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30 font-semibold animate-pulse">
-                        {task.progressPercent}%
+                    {task.status === 'paused' && (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold flex items-center gap-1">
+                          Paused ({task.progressPercent}%)
+                        </span>
+                        <button
+                          onClick={() => onResumeTask(task.id)}
+                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
+                          title="Resume downloading stream"
+                        >
+                          <Play className="w-3 h-3" /> Resume
+                        </button>
+                      </>
+                    )}
+
+                    {task.status === 'queued' && (
+                      <span className="px-2 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-semibold">
+                        Queued
                       </span>
-                      <button
-                        onClick={() => onPauseTask(task.id)}
-                        className="px-2 py-1 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 font-bold text-xs flex items-center gap-1 transition-colors"
-                        title="Pause downloading stream"
-                      >
-                        <Pause className="w-3 h-3" /> Pause
-                      </button>
-                    </>
-                  )}
+                    )}
 
-                  {task.status === 'paused' && (
-                    <>
-                      <span className="px-2 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold flex items-center gap-1">
-                        Paused ({task.progressPercent}%)
-                      </span>
-                      <button
-                        onClick={() => onResumeTask(task.id)}
-                        className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
-                        title="Resume downloading stream"
-                      >
-                        <Play className="w-3 h-3" /> Resume
-                      </button>
-                    </>
-                  )}
+                    {task.status === 'failed' && (
+                      <>
+                        <span className="px-2 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30 font-semibold flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5" /> Failed
+                        </span>
+                        <button
+                          onClick={() => onRetryTask(task.id)}
+                          className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
+                          title="Retry download"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Retry
+                        </button>
+                        {onOpenReportModal && (
+                          <button
+                            onClick={() => {
+                              onOpenReportModal({
+                                type: 'DOWNLOAD_FAILED',
+                                title: 'Download Stream Error',
+                                message: task.errorMessage || 'Unable to download video stream payload.',
+                                details: `Task ID: ${task.id}\nStream URL: ${task.chosenStream.url}`,
+                                targetUrl: task.video.originalPostUrl,
+                                videoId: task.video.id,
+                                suggestions: [
+                                  'Click Retry Download to re-attempt fetching',
+                                  'Check if video was made private or deleted',
+                                  'Select a lower stream resolution in settings'
+                                ]
+                              });
+                            }}
+                            className="p-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors"
+                            title="Debug & Report Error"
+                          >
+                            <Bug className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
 
-                  {task.status === 'queued' && (
-                    <span className="px-2 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-semibold">
-                      Queued
-                    </span>
-                  )}
+                  {/* Inspect Details Button */}
+                  <button
+                    onClick={() => setSelectedTaskForDetails(task)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                    title="View Download Details & Stream Inspector"
+                  >
+                    <Info className="w-4 h-4 text-blue-400" />
+                  </button>
 
-                  {task.status === 'failed' && (
-                    <>
-                      <span className="px-2 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30 font-semibold flex items-center gap-1">
-                        <AlertCircle className="w-3.5 h-3.5" /> Failed
-                      </span>
-                      <button
-                        onClick={() => onRetryTask(task.id)}
-                        className="px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 shadow transition-all"
-                        title="Retry download"
-                      >
-                        <RefreshCw className="w-3 h-3" /> Retry
-                      </button>
-                    </>
-                  )}
+                  {/* Cancel Action */}
+                  <button
+                    onClick={() => onCancelTask(task.id)}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                    title="Remove task"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+
                 </div>
 
-                {/* Inspect Details Button */}
-                <button
-                  onClick={() => setSelectedTaskForDetails(task)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                  title="View Download Details & Stream Inspector"
-                >
-                  <Info className="w-4 h-4 text-blue-400" />
-                </button>
-
-                {/* Cancel Action */}
-                <button
-                  onClick={() => onCancelTask(task.id)}
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-                  title="Remove task"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-
-              </div>
-
-            </div>
-          );
-        })}
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
       </div>
 
       {/* Details Modal */}
@@ -339,6 +384,7 @@ export const DownloadManager: React.FC<DownloadManagerProps> = ({
           onCancelTask={onCancelTask}
           onRetryTask={onRetryTask}
           onOpenPreview={onOpenPreview}
+          onOpenReportModal={onOpenReportModal}
         />
       )}
 

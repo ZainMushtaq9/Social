@@ -1,4 +1,4 @@
-export type VideoQuality = '1080p' | '720p' | '480p' | '360p' | 'SD' | 'HD' | 'Best';
+export type VideoQuality = '2160p' | '1440p' | '1080p' | '720p' | '480p' | '360p' | 'SD' | 'HD' | 'Best' | 'Audio Only';
 
 export type PlatformType = 'youtube' | 'instagram' | 'tiktok' | 'facebook' | 'twitter' | 'pinterest' | 'vimeo' | 'other';
 
@@ -86,11 +86,27 @@ export interface GlobalDownloadSettings {
   customFilenamePattern: string; // e.g. "{author}_{title}_{quality}"
 }
 
+export interface AppErrorInfo {
+  type: 'INVALID_URL' | 'UNSUPPORTED_PLATFORM' | 'PRIVATE_RESTRICTED' | 'NO_VIDEOS_FOUND' | 'DOWNLOAD_FAILED' | 'NETWORK_ERROR' | 'UNKNOWN';
+  title: string;
+  message: string;
+  details?: string;
+  targetUrl?: string;
+  timestamp?: string;
+  videoId?: string;
+  statusCode?: number;
+  suggestions?: string[];
+}
+
 export interface ScrapeResponse {
   success: boolean;
+  isProfileOnly?: boolean;
   profile?: FacebookProfileInfo;
   videos: FacebookVideo[];
   scrapedAt: string;
   message?: string;
+  errorType?: 'INVALID_URL' | 'UNSUPPORTED_PLATFORM' | 'PRIVATE_RESTRICTED' | 'NO_VIDEOS_FOUND' | 'NETWORK_ERROR' | 'UNKNOWN';
+  errorDetails?: string;
+  suggestions?: string[];
 }
 

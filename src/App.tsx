@@ -7,11 +7,12 @@ import { VideoGrid } from './components/VideoGrid';
 import { DownloadManager } from './components/DownloadManager';
 import { VideoModal } from './components/VideoModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ErrorReportModal } from './components/ErrorReportModal';
 import { 
   FacebookProfileInfo, FacebookVideo, DownloadTask, 
-  GlobalDownloadSettings, VideoQuality, ScrapeResponse 
+  GlobalDownloadSettings, VideoQuality, ScrapeResponse, AppErrorInfo 
 } from './types';
-import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio, AlertCircle } from 'lucide-react';
+import { Download, ShieldCheck, Zap, Sparkles, CheckCircle2, Film, ArrowDownToLine, Layers, Radio, AlertCircle, Bug } from 'lucide-react';
 
 export default function App() {
   // State
@@ -22,21 +23,22 @@ export default function App() {
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [isLoadingScrape, setIsLoadingScrape] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeErrorInfo, setActiveErrorInfo] = useState<AppErrorInfo | null>(null);
   const [previewVideo, setPreviewVideo] = useState<FacebookVideo | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isZipping, setIsZipping] = useState<boolean>(false);
 
   const [settings, setSettings] = useState<GlobalDownloadSettings>({
     defaultQuality: 'Best',
-    concurrencyLimit: 3,
+    concurrencyLimit: 8,
     lowBandwidthMode: false,
     saveMode: 'individual',
     preserveMetadataFile: true,
     customFilenamePattern: '{author}_{title}_{quality}'
   });
 
-  // Active concurrency queue processing & chunk buffers
-  const processingQueueRef = useRef(false);
+  // Active concurrency queue tracking & chunk buffers
+  const activeTaskIdsRef = useRef<Set<string>>(new Set());
   const abortControllersRef = useRef<{ [taskId: string]: AbortController }>({});
   const downloadedChunksRef = useRef<{ [taskId: string]: Uint8Array[] }>({});
 
@@ -65,7 +67,21 @@ export default function App() {
       try {
         data = await response.json();
       } catch (jsonErr) {
-        throw new Error('Server returned an invalid response format.');
+        const errorObj: AppErrorInfo = {
+          type: 'UNKNOWN',
+          title: 'Invalid Server Response',
+          message: 'The server returned an invalid or unparseable JSON response format.',
+          details: String(jsonErr),
+          targetUrl: rawUrl,
+          statusCode: response.status,
+          suggestions: [
+            'Verify server connection',
+            'Check server endpoint health in devtools'
+          ]
+        };
+        setActiveErrorInfo(errorObj);
+        setErrorMessage('Server returned an invalid response format.');
+        return;
       }
 
       if (data.success && data.videos && data.videos.length > 0) {
@@ -74,11 +90,56 @@ export default function App() {
         }
         setVideos(data.videos);
         setSelectedIds(new Set(data.videos.map(v => v.id)));
+        setErrorMessage(null);
+        setActiveErrorInfo(null);
+      } else if (data.success && (data.profile || data.isProfileOnly)) {
+        if (data.profile) {
+          setProfile(data.profile);
+        }
+        setVideos([]);
+        setSelectedIds(new Set());
+        setErrorMessage(null);
+        setActiveErrorInfo(null);
       } else {
-        setErrorMessage(data.message || 'No public video streams found for this link. Please make sure the link is public and accessible.');
+        const friendlyMsg = data.message || 'No public video streams found for this link. Please make sure the link is public and accessible.';
+        setErrorMessage(friendlyMsg);
+        
+        // Prepare diagnostic error payload
+        const errorObj: AppErrorInfo = {
+          type: data.errorType || 'NO_VIDEOS_FOUND',
+          title: data.errorType === 'INVALID_URL' ? 'Invalid Link Format' : data.errorType === 'PRIVATE_RESTRICTED' ? 'Restricted / Private Post' : 'No Public Videos Found',
+          message: friendlyMsg,
+          details: data.errorDetails || 'yt-dlp and HTML scraper pipeline yielded 0 stream results.',
+          targetUrl: rawUrl,
+          statusCode: response.status,
+          suggestions: data.suggestions || [
+            'Make sure the post or reel is set to Public',
+            'Try pasting a direct Reel link (e.g. facebook.com/reel/...)',
+            'Verify that the URL was copied correctly'
+          ]
+        };
+        
+        // Save current profile metadata if present even if 0 videos returned
+        if (data.profile) {
+          setProfile(data.profile);
+        }
+        
+        setActiveErrorInfo(errorObj);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Scrape request failed:', err);
+      const networkError: AppErrorInfo = {
+        type: 'NETWORK_ERROR',
+        title: 'Connection / Network Failure',
+        message: 'Unable to connect to the scraper service. Please check network or URL.',
+        details: err.stack || err.message,
+        targetUrl: rawUrl,
+        suggestions: [
+          'Verify your network connection',
+          'Ensure dev server port 3000 is active'
+        ]
+      };
+      setActiveErrorInfo(networkError);
       setErrorMessage('Unable to connect to the scraper service. Please check network or URL.');
     } finally {
       setIsLoadingScrape(false);
@@ -214,172 +275,173 @@ export default function App() {
     setDownloadTasks(prev => prev.filter(t => t.status !== 'completed'));
   };
 
-  // Task Queue Concurrency Engine Effect
-  useEffect(() => {
-    const processQueue = async () => {
-      if (processingQueueRef.current) return;
+  // Worker function to download a single task in parallel
+  const runTaskDownload = async (task: DownloadTask) => {
+    // Create AbortController for pause/cancel
+    const controller = new AbortController();
+    abortControllersRef.current[task.id] = controller;
 
-      const activeCount = downloadTasks.filter(t => t.status === 'downloading' || t.status === 'fetching_metadata').length;
-      if (activeCount >= settings.concurrencyLimit) return;
+    // Existing chunks for resume capability
+    const chunks: Uint8Array[] = downloadedChunksRef.current[task.id] || [];
+    let receivedBytes = chunks.reduce((acc, c) => acc + c.length, 0);
 
-      const nextQueuedTask = downloadTasks.find(t => t.status === 'queued');
-      if (!nextQueuedTask) return;
+    // Mark task as downloading
+    setDownloadTasks(prev =>
+      prev.map(t => (t.id === task.id ? { ...t, status: 'downloading', isPaused: false } : t))
+    );
 
-      processingQueueRef.current = true;
+    try {
+      const targetFilename = formatFilename(task.video, task.chosenQuality);
+      const proxyUrl = `/api/download-proxy?url=${encodeURIComponent(task.chosenStream.url)}&filename=${encodeURIComponent(targetFilename)}`;
 
-      // Create AbortController for pause/cancel
-      const controller = new AbortController();
-      abortControllersRef.current[nextQueuedTask.id] = controller;
+      const fetchHeaders: Record<string, string> = {};
+      if (receivedBytes > 0) {
+        fetchHeaders['Range'] = `bytes=${receivedBytes}-`;
+      }
 
-      // Existing chunks for resume capability
-      const chunks: Uint8Array[] = downloadedChunksRef.current[nextQueuedTask.id] || [];
-      let receivedBytes = chunks.reduce((acc, c) => acc + c.length, 0);
+      const response = await fetch(proxyUrl, {
+        signal: controller.signal,
+        headers: fetchHeaders
+      });
 
-      // Mark task as downloading
-      setDownloadTasks(prev =>
-        prev.map(t => (t.id === nextQueuedTask.id ? { ...t, status: 'downloading', isPaused: false } : t))
-      );
-
-      try {
-        const targetFilename = formatFilename(nextQueuedTask.video, nextQueuedTask.chosenQuality);
-        const proxyUrl = `/api/download-proxy?url=${encodeURIComponent(nextQueuedTask.chosenStream.url)}&filename=${encodeURIComponent(targetFilename)}`;
-
-        const fetchHeaders: Record<string, string> = {};
-        if (receivedBytes > 0) {
-          fetchHeaders['Range'] = `bytes=${receivedBytes}-`;
-        }
-
-        const response = await fetch(proxyUrl, {
-          signal: controller.signal,
-          headers: fetchHeaders
-        });
-
-        if (!response.ok && response.status !== 206) {
-          let errorMsg = `Download failed (HTTP ${response.status})`;
-          try {
-            const errJson = await response.json();
-            if (errJson.error) {
-              errorMsg = errJson.error;
-            }
-          } catch (e) {
-            // ignore JSON parse error
+      if (!response.ok && response.status !== 206) {
+        let errorMsg = `Download failed (HTTP ${response.status})`;
+        try {
+          const errJson = await response.json();
+          if (errJson.error) {
+            errorMsg = errJson.error;
           }
-          throw new Error(errorMsg);
+        } catch (e) {
+          // ignore JSON parse error
         }
+        throw new Error(errorMsg);
+      }
 
-        const contentLengthHeader = response.headers.get('content-length');
-        const contentRangeHeader = response.headers.get('content-range');
+      const contentLengthHeader = response.headers.get('content-length');
+      const contentRangeHeader = response.headers.get('content-range');
 
-        let totalSize = nextQueuedTask.totalBytes || 20971520;
-        if (contentRangeHeader) {
-          const match = contentRangeHeader.match(/\/(\d+)/);
-          if (match && match[1]) {
-            totalSize = parseInt(match[1], 10);
-          }
-        } else if (contentLengthHeader) {
-          totalSize = receivedBytes + parseInt(contentLengthHeader, 10);
+      let totalSize = task.totalBytes || 20971520;
+      if (contentRangeHeader) {
+        const match = contentRangeHeader.match(/\/(\d+)/);
+        if (match && match[1]) {
+          totalSize = parseInt(match[1], 10);
         }
+      } else if (contentLengthHeader) {
+        totalSize = receivedBytes + parseInt(contentLengthHeader, 10);
+      }
 
-        if (!response.body) {
-          throw new Error('Response body stream unavailable');
-        }
+      if (!response.body) {
+        throw new Error('Response body stream unavailable');
+      }
 
-        const reader = response.body.getReader();
-        const startTime = Date.now();
+      const reader = response.body.getReader();
+      const startTime = Date.now();
 
-        while (true) {
-          if (controller.signal.aborted) {
-            // Task was paused or cancelled by user
-            return;
-          }
-
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          chunks.push(value);
-          downloadedChunksRef.current[nextQueuedTask.id] = chunks;
-          receivedBytes += value.length;
-
-          const elapsedSec = (Date.now() - startTime) / 1000;
-          const currentSpeed = elapsedSec > 0 ? (value.length) / elapsedSec : 0;
-          const pct = Math.min(99, Math.round((receivedBytes / totalSize) * 100));
-
-          setDownloadTasks(prev =>
-            prev.map(t =>
-              t.id === nextQueuedTask.id
-                ? {
-                    ...t,
-                    progressPercent: pct,
-                    downloadedBytes: receivedBytes,
-                    totalBytes: totalSize,
-                    speedBps: currentSpeed
-                  }
-                : t
-            )
-          );
-        }
-
-        const blob = new Blob(chunks, { type: 'video/mp4' });
-        const blobUrl = URL.createObjectURL(blob);
-
-        // Immediately trigger local disk download save as each video finishes
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = targetFilename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        // Free chunk buffers and controllers from memory immediately
-        delete downloadedChunksRef.current[nextQueuedTask.id];
-        delete abortControllersRef.current[nextQueuedTask.id];
-
-        // Revoke Object URL after brief delay to release browser memory
-        setTimeout(() => {
-          URL.revokeObjectURL(blobUrl);
-        }, 15000);
-
-        // Complete task
-        setDownloadTasks(prev =>
-          prev.map(t =>
-            t.id === nextQueuedTask.id
-              ? {
-                  ...t,
-                  status: 'completed',
-                  progressPercent: 100,
-                  downloadedBytes: receivedBytes,
-                  totalBytes: receivedBytes,
-                  blobUrl,
-                  savedFileName: targetFilename
-                }
-              : t
-          )
-        );
-      } catch (err: any) {
-        if (err.name === 'AbortError' || controller.signal.aborted) {
-          console.log(`Task ${nextQueuedTask.id} download stream paused or cancelled.`);
+      while (true) {
+        if (controller.signal.aborted) {
           return;
         }
 
-        console.error('Download error:', err);
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        chunks.push(value);
+        downloadedChunksRef.current[task.id] = chunks;
+        receivedBytes += value.length;
+
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const currentSpeed = elapsedSec > 0 ? value.length / elapsedSec : 0;
+        const pct = Math.min(99, Math.round((receivedBytes / totalSize) * 100));
+
         setDownloadTasks(prev =>
           prev.map(t =>
-            t.id === nextQueuedTask.id
+            t.id === task.id
               ? {
                   ...t,
-                  status: 'failed',
-                  errorMessage: err.message || 'Download failed due to network or stream error'
+                  progressPercent: pct,
+                  downloadedBytes: receivedBytes,
+                  totalBytes: totalSize,
+                  speedBps: currentSpeed
                 }
               : t
           )
         );
-      } finally {
-        processingQueueRef.current = false;
       }
-    };
 
-    processQueue();
-  }, [downloadTasks, settings.concurrencyLimit, settings.saveMode]);
+      const blob = new Blob(chunks, { type: 'video/mp4' });
+      const blobUrl = URL.createObjectURL(blob);
+
+      // Immediately trigger local disk download save
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = targetFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      delete downloadedChunksRef.current[task.id];
+      delete abortControllersRef.current[task.id];
+
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 15000);
+
+      // Complete task
+      setDownloadTasks(prev =>
+        prev.map(t =>
+          t.id === task.id
+            ? {
+                ...t,
+                status: 'completed',
+                progressPercent: 100,
+                downloadedBytes: receivedBytes,
+                totalBytes: receivedBytes,
+                blobUrl,
+                savedFileName: targetFilename
+              }
+            : t
+        )
+      );
+    } catch (err: any) {
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        console.log(`Task ${task.id} stream paused or cancelled.`);
+        return;
+      }
+
+      console.error('Download error:', err);
+      setDownloadTasks(prev =>
+        prev.map(t =>
+          t.id === task.id
+            ? {
+                ...t,
+                status: 'failed',
+                errorMessage: err.message || 'Download failed due to network or stream error'
+              }
+            : t
+        )
+      );
+    } finally {
+      activeTaskIdsRef.current.delete(task.id);
+    }
+  };
+
+  // Concurrent Task Dispatcher Effect
+  useEffect(() => {
+    const queuedTasks = downloadTasks.filter(t => t.status === 'queued');
+    if (queuedTasks.length === 0) return;
+
+    const availableSlots = settings.concurrencyLimit - activeTaskIdsRef.current.size;
+    if (availableSlots <= 0) return;
+
+    const tasksToStart = queuedTasks
+      .filter(t => !activeTaskIdsRef.current.has(t.id))
+      .slice(0, availableSlots);
+
+    tasksToStart.forEach(task => {
+      activeTaskIdsRef.current.add(task.id);
+      runTaskDownload(task);
+    });
+  }, [downloadTasks, settings.concurrencyLimit]);
 
   // Export finished videos as a single ZIP Archive with metadata
   const handleDownloadZip = async () => {
@@ -472,18 +534,33 @@ export default function App() {
 
         {/* Error / Status Notice */}
         {errorMessage && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 flex items-start gap-3 animate-fadeIn">
-            <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-            <div className="flex-1 text-sm leading-relaxed">
-              <p className="font-semibold text-amber-300 mb-0.5">Extraction Notice</p>
-              <p className="text-amber-200/90">{errorMessage}</p>
+          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fadeIn">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm leading-relaxed">
+                <p className="font-semibold text-amber-300 mb-0.5">Extraction Notice</p>
+                <p className="text-amber-200/90">{errorMessage}</p>
+              </div>
             </div>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="text-amber-400 hover:text-amber-200 text-xs font-medium px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition shrink-0"
-            >
-              Dismiss
-            </button>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              {activeErrorInfo && (
+                <button
+                  onClick={() => setActiveErrorInfo(activeErrorInfo)}
+                  className="text-amber-300 hover:text-white text-xs font-semibold px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 transition flex items-center gap-1.5"
+                >
+                  <Bug className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Debug & Report</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-amber-400 hover:text-amber-200 text-xs font-medium px-2 py-1 rounded bg-slate-900/60 hover:bg-slate-900 transition"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -498,6 +575,7 @@ export default function App() {
             onStartBatchDownload={handleStartBatchDownload}
             isDownloading={downloadTasks.some(t => t.status === 'downloading')}
             lowBandwidthMode={settings.lowBandwidthMode}
+            onScrapeUrl={handleScrapeUrl}
           />
         )}
 
@@ -515,6 +593,7 @@ export default function App() {
           onDownloadZip={handleDownloadZip}
           isZipping={isZipping}
           onOpenPreview={(video) => setPreviewVideo(video)}
+          onOpenReportModal={(info) => setActiveErrorInfo(info)}
         />
 
         {/* Videos Grid or Empty State */}
@@ -595,6 +674,11 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={handleUpdateSettings}
+      />
+
+      <ErrorReportModal
+        errorInfo={activeErrorInfo}
+        onClose={() => setActiveErrorInfo(null)}
       />
 
       {/* Footer */}

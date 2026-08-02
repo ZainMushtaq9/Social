@@ -11,6 +11,7 @@ interface ProfileHeaderCardProps {
   onStartBatchDownload: () => void;
   isDownloading: boolean;
   lowBandwidthMode?: boolean;
+  onScrapeUrl?: (url: string) => void;
 }
 
 export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
@@ -21,16 +22,26 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
   onDeselectAll,
   onStartBatchDownload,
   isDownloading,
-  lowBandwidthMode
+  lowBandwidthMode,
+  onScrapeUrl
 }) => {
+  const [quickReelUrl, setQuickReelUrl] = React.useState('');
   const allSelected = selectedCount === totalCount && totalCount > 0;
+
+  const handleQuickSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (quickReelUrl.trim() && onScrapeUrl) {
+      onScrapeUrl(quickReelUrl.trim());
+      setQuickReelUrl('');
+    }
+  };
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl text-white relative">
       
       {/* Cover Banner */}
       <div className="h-32 sm:h-44 w-full relative bg-slate-950 overflow-hidden">
-        {!lowBandwidthMode && profile.coverUrl ? (
+        {!lowBandwidthMode && profile.coverUrl && profile.coverUrl.trim() !== '' ? (
           <img
             src={profile.coverUrl}
             alt={`${profile.name} Cover`}
@@ -51,12 +62,18 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
           {/* Avatar & Info */}
           <div className="flex items-end gap-3 sm:gap-4">
             <div className="relative">
-              <img
-                src={profile.avatarUrl}
-                alt={profile.name}
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-4 border-slate-900 object-cover shadow-2xl bg-slate-800"
-                referrerPolicy="no-referrer"
-              />
+              {profile.avatarUrl && profile.avatarUrl.trim() !== '' ? (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.name}
+                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-4 border-slate-900 object-cover shadow-2xl bg-slate-800"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-4 border-slate-900 bg-gradient-to-br from-blue-600 via-indigo-700 to-slate-800 flex items-center justify-center text-white text-2xl font-bold shadow-2xl">
+                  {profile.name ? profile.name.charAt(0).toUpperCase() : 'F'}
+                </div>
+              )}
               {profile.verified && (
                 <div className="absolute -bottom-1 -right-1 bg-blue-500 text-white rounded-full p-1 border-2 border-slate-900 shadow-md">
                   <CheckCircle2 className="w-4 h-4" />
@@ -90,33 +107,42 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
                 <span>•</span>
                 <span className="flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-md border border-emerald-500/20">
                   <Video className="w-3.5 h-3.5 text-emerald-400" />
-                  {totalCount} Video{totalCount !== 1 ? 's' : ''} Scraped
+                  {totalCount > 0 ? `${totalCount} Video${totalCount !== 1 ? 's' : ''} Scraped` : 'Profile Verified'}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Batch Download Action Button */}
-          <div className="flex items-center gap-2 pt-2 sm:pt-0">
-            <button
-              onClick={onStartBatchDownload}
-              disabled={selectedCount === 0 || isDownloading}
-              className={`w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 shadow-lg transition-all ${
-                selectedCount > 0 && !isDownloading
-                  ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-emerald-500/25 cursor-pointer scale-102 hover:scale-105'
-                  : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-60'
-              }`}
-            >
-              <Download className={`w-5 h-5 ${isDownloading ? 'animate-bounce' : ''}`} />
-              <span>
-                {isDownloading
-                  ? 'Batch Downloading...'
-                  : selectedCount > 0
-                  ? `Download ${selectedCount} Selected Video${selectedCount > 1 ? 's' : ''}`
-                  : 'Select Videos to Download'}
+          {/* Batch Download Action Button or Profile Badge */}
+          {totalCount > 0 ? (
+            <div className="flex items-center gap-2 pt-2 sm:pt-0">
+              <button
+                onClick={onStartBatchDownload}
+                disabled={selectedCount === 0 || isDownloading}
+                className={`w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 shadow-lg transition-all ${
+                  selectedCount > 0 && !isDownloading
+                    ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-emerald-500/25 cursor-pointer scale-102 hover:scale-105'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-60'
+                }`}
+              >
+                <Download className={`w-5 h-5 ${isDownloading ? 'animate-bounce' : ''}`} />
+                <span>
+                  {isDownloading
+                    ? 'Batch Downloading...'
+                    : selectedCount > 0
+                    ? `Download ${selectedCount} Selected Video${selectedCount > 1 ? 's' : ''}`
+                    : 'Select Videos to Download'}
+                </span>
+              </button>
+            </div>
+          ) : (
+            <div className="pt-2 sm:pt-0">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/30 text-xs font-semibold">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                Profile Loaded
               </span>
-            </button>
-          </div>
+            </div>
+          )}
 
         </div>
 
@@ -127,38 +153,71 @@ export const ProfileHeaderCard: React.FC<ProfileHeaderCardProps> = ({
           </p>
         )}
 
-        {/* Bulk Selection Controls Bar */}
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-800/80 flex-wrap text-xs">
-          
-          <div className="flex items-center gap-2">
-            <button
-              onClick={allSelected ? onDeselectAll : onSelectAll}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium transition-colors"
-            >
-              {allSelected ? (
-                <>
-                  <CheckSquare className="w-4 h-4 text-emerald-400" />
-                  Deselect All ({totalCount})
-                </>
-              ) : (
-                <>
-                  <Square className="w-4 h-4 text-blue-400" />
-                  Select All ({totalCount})
-                </>
-              )}
-            </button>
-
-            <span className="text-slate-400 hidden xs:inline">
-              <strong className="text-white">{selectedCount}</strong> of <strong className="text-white">{totalCount}</strong> selected
-            </span>
+        {/* Quick Reel Input Form when 0 videos are loaded for this profile */}
+        {totalCount === 0 && onScrapeUrl && (
+          <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-300">
+              <span className="font-bold text-white flex items-center gap-1.5">
+                <Video className="w-4 h-4 text-blue-400" />
+                Extract Video or Reel from {profile.name}
+              </span>
+              <span className="text-[11px] text-slate-400">Paste direct link below</span>
+            </div>
+            
+            <form onSubmit={handleQuickSubmit} className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={quickReelUrl}
+                onChange={(e) => setQuickReelUrl(e.target.value)}
+                placeholder="Paste direct Facebook Reel or Video link (e.g. facebook.com/reel/...)"
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <button
+                type="submit"
+                disabled={!quickReelUrl.trim()}
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shadow transition disabled:opacity-50"
+              >
+                Scrape Reel
+              </button>
+            </form>
           </div>
+        )}
 
-          <div className="text-slate-400 text-[11px] flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-md border border-slate-800">
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            <span>Highest available resolution (1080p Full HD) selected by default</span>
+        {/* Bulk Selection Controls Bar (only if totalCount > 0) */}
+        {totalCount > 0 && (
+          <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-800/80 flex-wrap text-xs">
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={allSelected ? onDeselectAll : onSelectAll}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium transition-colors"
+              >
+                {allSelected ? (
+                  <>
+                    <CheckSquare className="w-4 h-4 text-emerald-400" />
+                    Deselect All ({totalCount})
+                  </>
+                ) : (
+                  <>
+                    <Square className="w-4 h-4 text-blue-400" />
+                    Select All ({totalCount})
+                  </>
+                )}
+              </button>
+
+              <span className="text-slate-400 hidden xs:inline">
+                <strong className="text-white">{selectedCount}</strong> of <strong className="text-white">{totalCount}</strong> selected
+              </span>
+            </div>
+
+            <div className="text-slate-400 text-[11px] flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-md border border-slate-800">
+              <Sparkles className="w-3 h-3 text-amber-400" />
+              <span>Highest available resolution (1080p Full HD) selected by default</span>
+            </div>
+
           </div>
-
-        </div>
+        )}
 
       </div>
     </div>

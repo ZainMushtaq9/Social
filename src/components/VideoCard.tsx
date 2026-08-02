@@ -34,7 +34,8 @@ export const VideoCard: React.FC<VideoCardProps> = ({
   const activeStream = video.qualityStreams.find(s => s.quality === video.selectedQuality) 
     || video.qualityStreams[0];
 
-  const displayThumb = !imgError && video.thumbnailUrl ? video.thumbnailUrl : video.authorAvatar;
+  const validThumb = (video.thumbnailUrl && video.thumbnailUrl.trim() !== '') ? video.thumbnailUrl : ((video.authorAvatar && video.authorAvatar.trim() !== '') ? video.authorAvatar : null);
+  const displayThumb = !imgError ? validThumb : null;
 
   return (
     <div 
